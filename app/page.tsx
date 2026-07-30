@@ -14,6 +14,9 @@ import { createClient } from "@/utils/supabase/client";
 
 type Workspace =
   | "overview"
+  | "operations"
+  | "forecast"
+  | "energy"
   | "discharger"
   | "driver"
   | "facility"
@@ -300,18 +303,30 @@ function loadKakaoMaps() {
   return kakaoMapsLoader;
 }
 
-const navigation: {
+const adminNavigation: {
   id: Workspace;
   label: string;
   eyebrow: string;
   icon: string;
 }[] = [
-  { id: "overview", label: "통합 관제", eyebrow: "관리자", icon: "⌂" },
-  { id: "discharger", label: "부산물 등록", eyebrow: "배출업체", icon: "+" },
-  { id: "driver", label: "수거 운행", eyebrow: "수거기사", icon: "↗" },
-  { id: "facility", label: "반입·처리", eyebrow: "자원화시설", icon: "□" },
-  { id: "integrations", label: "서비스 연동", eyebrow: "시스템", icon: "⋯" },
+  { id: "overview", label: "통합 현황", eyebrow: "전체 흐름", icon: "⌂" },
+  { id: "operations", label: "수거 운영", eyebrow: "배차·차량", icon: "↗" },
+  { id: "forecast", label: "AI 예측", eyebrow: "수급·물류", icon: "AI" },
+  { id: "energy", label: "자원화·에너지", eyebrow: "소화·ESS", icon: "E" },
+  { id: "integrations", label: "계정·연동", eyebrow: "설정", icon: "⋯" },
 ];
+
+const roleNavigation: Record<Exclude<UserRole, "admin">, (typeof adminNavigation)> = {
+  discharger: [
+    { id: "discharger", label: "부산물 등록", eyebrow: "배출업체", icon: "+" },
+  ],
+  driver: [
+    { id: "driver", label: "수거 운행", eyebrow: "수거기사", icon: "↗" },
+  ],
+  facility: [
+    { id: "facility", label: "반입·처리", eyebrow: "자원화시설", icon: "□" },
+  ],
+};
 
 const statusTone: Record<string, string> = {
   "접수 완료": "blue",
@@ -374,10 +389,34 @@ const integrations = [
   {
     name: "Resend",
     detail: "요청 · 지연 · 완료 이메일",
-    status: "API 키 필요",
+    status: "서버 알림 연결",
     group: "알림",
     tone: "navy",
     mark: "R",
+  },
+  {
+    name: "부산 위판 데이터",
+    detail: "공동어시장 위판량 · 어종 · 입항량",
+    status: "데이터 API 필요",
+    group: "예측 원천",
+    tone: "blue",
+    mark: "B",
+  },
+  {
+    name: "혼합소화 PLC",
+    detail: "투입비 · pH · 유기물 부하 · 체류시간",
+    status: "설비 연동 필요",
+    group: "공정 제어",
+    tone: "green",
+    mark: "P",
+  },
+  {
+    name: "ESS BMS",
+    detail: "SOC · 충방전 · 발전 잉여전력",
+    status: "설비 연동 필요",
+    group: "에너지 제어",
+    tone: "violet",
+    mark: "E",
   },
 ];
 
@@ -913,6 +952,10 @@ function AdminDispatchPanel({
   const driverVehicles = vehicles.filter(
     (vehicle) => vehicle.driver_id === driverId,
   );
+  const suggestedRouteOrder = Math.max(
+    1,
+    pendingRequests.findIndex((request) => request.id === requestId) + 1,
+  );
 
   const loadResources = useCallback(async () => {
     const [driverResult, vehicleResult] = await Promise.all([
@@ -987,12 +1030,11 @@ function AdminDispatchPanel({
       return;
     }
     setBusy(true);
-    const form = new FormData(event.currentTarget);
     const { error } = await supabase.rpc("assign_collection_request", {
       p_request_id: requestId,
       p_driver_id: driverId,
       p_vehicle_id: vehicleId,
-      p_route_order: Number(form.get("routeOrder")) || 1,
+      p_route_order: suggestedRouteOrder,
     });
     setBusy(false);
     if (error) {
@@ -1011,8 +1053,21 @@ function AdminDispatchPanel({
           <span className="section-kicker">LIVE DISPATCH</span>
           <h2>기사·차량 배차</h2>
         </div>
-        <span className="number-pill">{pendingRequests.length}</span>
+        <div className="dispatch-resource-state">
+          <span>기사 {drivers.length}명</span>
+          <span>차량 {vehicles.length}대</span>
+          <b>대기 {pendingRequests.length}건</b>
+        </div>
       </div>
+      {drivers.length === 0 && (
+        <div className="resource-empty-banner">
+          <strong>활성화된 수거기사가 없습니다.</strong>
+          <span>
+            아래 ‘사용자 계정 초대’에서 수거기사 계정을 만든 뒤 초대받은
+            사용자가 한 번 로그인하면 기사 목록에 표시됩니다.
+          </span>
+        </div>
+      )}
       <div className="dispatch-grid">
         <form onSubmit={assignRequest}>
           <label>
@@ -1038,7 +1093,9 @@ function AdminDispatchPanel({
               onChange={(event) => setDriverId(event.target.value)}
               required
             >
-              <option value="">기사 선택</option>
+              <option value="">
+                {drivers.length ? "기사 선택" : "활성 기사 없음"}
+              </option>
               {drivers.map((driver) => (
                 <option key={driver.id} value={driver.id}>
                   {driver.full_name} ·{" "}
@@ -1054,7 +1111,13 @@ function AdminDispatchPanel({
               onChange={(event) => setVehicleId(event.target.value)}
               required
             >
-              <option value="">차량 선택</option>
+              <option value="">
+                {driverId
+                  ? driverVehicles.length
+                    ? "차량 선택"
+                    : "등록된 차량 없음"
+                  : "기사 먼저 선택"}
+              </option>
               {driverVehicles.map((vehicle) => (
                 <option key={vehicle.id} value={vehicle.id}>
                   {vehicle.plate_number} · {vehicle.capacity_kg}kg
@@ -1063,8 +1126,14 @@ function AdminDispatchPanel({
             </select>
           </label>
           <label>
-            <span>방문 순서</span>
-            <input name="routeOrder" type="number" min="1" defaultValue="1" />
+            <span>자동 방문 순서</span>
+            <input
+              type="number"
+              min="1"
+              value={suggestedRouteOrder}
+              readOnly
+              aria-label="자동 계산 방문 순서"
+            />
           </label>
           <button className="primary-action" disabled={busy}>
             {busy ? "저장 중…" : "배차 확정"}
@@ -1097,260 +1166,643 @@ function AdminDispatchPanel({
 }
 
 function AdminOverview({
-  notify,
   requests,
   weather,
   weatherLoading,
-  supabase,
-  onChanged,
+  onNavigate,
 }: {
-  notify: (message: string) => void;
   requests: DbWasteRequest[];
   weather: WeatherForecast | null;
   weatherLoading: boolean;
-  supabase: SupabaseClient;
-  onChanged: () => Promise<void>;
+  onNavigate: (workspace: Workspace) => void;
 }) {
+  const totalWeightKg = requests.reduce(
+    (sum, request) => sum + Number(request.estimated_weight_kg || 0),
+    0,
+  );
+  const activeCount = requests.filter(
+    (request) => !["completed", "cancelled"].includes(request.status),
+  ).length;
+  const completedCount = requests.filter(
+    (request) => request.status === "completed",
+  ).length;
+  const biogasReadyKg = requests
+    .filter((request) =>
+      ["collected", "in_transit", "received", "processing", "completed"].includes(
+        request.status,
+      ),
+    )
+    .reduce(
+      (sum, request) => sum + Number(request.estimated_weight_kg || 0),
+      0,
+    );
+  const completionRate =
+    requests.length > 0
+      ? Math.round((completedCount / requests.length) * 100)
+      : 0;
+  const pipelineStages = [
+    ["01", "발생 예측", requests.length, "AI 수급 계획"],
+    [
+      "02",
+      "등록",
+      requests.filter((request) => request.status === "requested").length,
+      "배출업체 접수",
+    ],
+    [
+      "03",
+      "수거",
+      requests.filter((request) =>
+        ["assigned", "collecting", "collected", "in_transit"].includes(
+          request.status,
+        ),
+      ).length,
+      "최적 경로 운송",
+    ],
+    [
+      "04",
+      "자원화",
+      requests.filter((request) =>
+        ["received", "processing", "completed"].includes(request.status),
+      ).length,
+      "혼합소화 투입",
+    ],
+    ["05", "에너지", completedCount, "바이오가스·ESS"],
+  ] as const;
+  const modules: {
+    title: string;
+    eyebrow: string;
+    description: string;
+    workspace: Workspace;
+    state: string;
+  }[] = [
+    {
+      title: "위판량·발생량 예측",
+      eyebrow: "AI FORECAST",
+      description:
+        "부산 위판 흐름과 등록 이력을 바탕으로 다음 수거 물량을 예측합니다.",
+      workspace: "forecast",
+      state: "예측 모델",
+    },
+    {
+      title: "수거·물류 최적화",
+      eyebrow: "SMART LOGISTICS",
+      description:
+        "기사, 차량 적재량, 수거지와 기상을 함께 보고 방문 순서를 결정합니다.",
+      workspace: "operations",
+      state: `${activeCount}건 운영`,
+    },
+    {
+      title: "혼합소화·ESS 운영",
+      eyebrow: "BIOGAS & ENERGY",
+      description:
+        "수산 부산물 투입비와 바이오가스 생산, ESS 충방전을 한 화면에서 봅니다.",
+      workspace: "energy",
+      state: `${(biogasReadyKg / 1000).toFixed(1)}t 확보`,
+    },
+  ];
+
   return (
     <div className="page-stack">
-      <section className="page-hero admin-hero">
+      <section className="page-hero admin-hero simple-hero">
         <div>
-          <span className="page-kicker">INTEGRATED CONTROL</span>
+          <span className="page-kicker">BUSAN BLUE RESOURCE CONTROL</span>
           <h1>
-            수산 부산물 흐름을
+            부산 수산 부산물을
             <br />
-            <em>한눈에 관리하세요.</em>
+            <em>에너지 자원으로 연결합니다.</em>
           </h1>
           <p>
-            등록부터 수거, 반입, 처리까지 전 과정의 현재 상태를 실시간으로
-            확인합니다.
+            위판량 예측부터 부산물 발생 분석, 수거 최적화, 혼합소화와 ESS
+            운영까지 하나의 공급망으로 관리합니다.
           </p>
         </div>
         <div className="hero-status-card">
           <div className="hero-status-top">
             <span>
               <i />
-              실시간 운영 중
+              공급망 실시간 연결
             </span>
-            <small>2026. 07. 30 14:32 기준</small>
+            <small>SUPABASE LIVE</small>
           </div>
           <div className="hero-status-numbers">
             <div>
-              <span>오늘 처리 진행률</span>
+              <span>전체 처리 완료율</span>
               <strong>
-                72<small>%</small>
+                {completionRate}
+                <small>%</small>
               </strong>
             </div>
-            <div className="radial-progress">
-              <span>72</span>
+            <div
+              className="radial-progress"
+              style={{
+                background: `conic-gradient(#5dde9f 0 ${completionRate}%, #294f40 ${completionRate}%)`,
+              }}
+            >
+              <span>{completionRate}</span>
             </div>
           </div>
           <div className="hero-progress">
-            <i />
+            <i style={{ width: `${completionRate}%` }} />
           </div>
-          <p>총 18건 중 13건이 반입 또는 처리 완료되었습니다.</p>
+          <p>
+            실제 DB {requests.length}건 중 {completedCount}건이 자원화
+            완료되었습니다.
+          </p>
         </div>
       </section>
 
       <section className="metric-row">
         <MiniMetric
-          label="오늘 등록"
-          value="18건"
-          note="어제보다 3건 증가"
+          label="등록 물량"
+          value={`${(totalWeightKg / 1000).toFixed(2)}t`}
+          note={`${requests.length}건의 실제 요청`}
           accent="mint"
         />
         <MiniMetric
-          label="수거 진행"
-          value="7건"
-          note="기사 4명 운행 중"
+          label="운영 진행"
+          value={`${activeCount}건`}
+          note="등록·배차·수거·처리"
           accent="orange"
         />
         <MiniMetric
-          label="오늘 반입량"
-          value="6.42t"
-          note="예상 대비 91%"
+          label="바이오가스 원료"
+          value={`${(biogasReadyKg / 1000).toFixed(2)}t`}
+          note="수거 이후 확보 물량"
           accent="blue"
         />
         <MiniMetric
-          label="처리 완료"
-          value="13건"
-          note="평균 4시간 18분"
+          label="부산 수거 기상"
+          value={
+            weatherLoading
+              ? "확인 중"
+              : weather
+                ? `${Math.round(weather.temperatureC)}°`
+                : "오류"
+          }
+          note={weather?.riskReason ?? "단기예보 기반 위험 판단"}
           accent="violet"
         />
       </section>
 
-      <section className="dashboard-grid">
-        <article className="surface pipeline-card">
-          <div className="surface-heading">
-            <div>
-              <span className="section-kicker">TODAY&apos;S PIPELINE</span>
-              <h2>오늘의 처리 파이프라인</h2>
-            </div>
-            <button
-              className="quiet-button"
-              onClick={() => notify("전체 처리 이력을 불러왔습니다.")}
-            >
-              전체 이력
-            </button>
-          </div>
-          <div className="pipeline">
-            {[
-              ["01", "등록", "18", "배출업체 접수"],
-              ["02", "배차", "15", "기사 배정"],
-              ["03", "수거", "7", "현장 진행"],
-              ["04", "반입", "13", "시설 계량"],
-              ["05", "처리", "11", "자원화 완료"],
-            ].map(([no, label, count, detail], index) => (
-              <div className="pipeline-stage" key={label}>
-                <div className={`stage-ring stage-${index}`}>
-                  <span>{no}</span>
-                  <strong>{count}</strong>
-                </div>
-                <b>{label}</b>
-                <small>{detail}</small>
-                {index < 4 && <i className="stage-connector" />}
-              </div>
-            ))}
-          </div>
-        </article>
-
-        <article className="surface weather-card">
-          <div className="surface-heading">
-            <div>
-              <span className="section-kicker">FIELD SAFETY</span>
-              <h2>부산 수거 기상</h2>
-            </div>
-            <span className="weather-place">
-              {weather?.location ?? "부산"}
-            </span>
-          </div>
-          <div className="weather-main">
-            <span className="weather-symbol">{weather?.symbol ?? "…"}</span>
-            <strong>
-              {weatherLoading
-                ? "--°"
-                : weather
-                  ? `${Math.round(weather.temperatureC)}°`
-                  : "오류"}
-            </strong>
-            <div>
-              <b>
-                {weatherLoading
-                  ? "예보 확인 중"
-                  : weather?.weather ?? "조회 실패"}
-              </b>
-              <small>
-                {weather
-                  ? `강수 ${weather.precipitationProbability}% · ${weather.windDirection}`
-                  : "잠시 후 다시 확인해 주세요."}
-              </small>
-            </div>
-          </div>
-          <div className={`risk-line risk-${weather?.riskTone ?? "medium"}`}>
-            <span>
-              <i />
-              수거 위험도
-            </span>
-            <strong>{weather?.riskLevel ?? "확인 중"}</strong>
-          </div>
-          <p>{weather?.riskReason ?? "기상청 단기예보를 불러오고 있습니다."}</p>
-          {weather && (
-            <button
-              className="weather-source"
-              onClick={() => notify(`${weather.source} 기준 예보입니다.`)}
-            >
-              {new Intl.DateTimeFormat("ko-KR", {
-                timeZone: "Asia/Seoul",
-                month: "numeric",
-                day: "numeric",
-                hour: "numeric",
-              }).format(new Date(weather.forecastAt))}{" "}
-              예보
-            </button>
-          )}
-        </article>
-
-        <article className="surface request-table-card">
-          <div className="surface-heading">
-            <div>
-              <span className="section-kicker">LIVE REQUESTS</span>
-              <h2>최근 수거 요청</h2>
-            </div>
-            <div className="table-filter">
-              <button className="active">전체</button>
-              <button>진행 중</button>
-              <button>완료</button>
-            </div>
-          </div>
-          <div
-            className="request-table"
-            role="table"
-            aria-label="최근 수거 요청"
+      <section className="control-modules">
+        {modules.map((module) => (
+          <button
+            className="surface control-module"
+            key={module.title}
+            onClick={() => onNavigate(module.workspace)}
           >
-            <div className="request-row request-head" role="row">
-              <span>요청번호</span>
-              <span>배출업체 / 품목</span>
-              <span>예상량</span>
-              <span>담당 기사</span>
-              <span>상태</span>
-              <span>업데이트</span>
-            </div>
-            {requests.length === 0 ? (
-              <div className="request-empty">
-                실제 DB에 등록된 수거 요청이 아직 없습니다.
-              </div>
-            ) : (
-              requests.map((request) => (
-                <button
-                  className="request-row"
-                  role="row"
-                  key={request.id}
-                  onClick={() =>
-                    notify(
-                      `${request.request_number} 상세 정보를 열었습니다.`,
-                    )
-                  }
-                >
-                  <span>
-                    <b>{request.request_number}</b>
-                  </span>
-                  <span>
-                    <strong>
-                      {getOrganizationName(request.organizations)}
-                    </strong>
-                    <small>{request.waste_type}</small>
-                  </span>
-                  <span>
-                    {Number(request.estimated_weight_kg).toLocaleString()} kg
-                  </span>
-                  <span>배차 대기</span>
-                  <span>
-                    <StatusBadge
-                      status={
-                        requestStatusLabel[request.status] ?? request.status
-                      }
-                    />
-                  </span>
-                  <span>
-                    {new Date(request.created_at).toLocaleString("ko-KR", {
-                      month: "2-digit",
-                      day: "2-digit",
-                      hour: "2-digit",
-                      minute: "2-digit",
-                    })}
-                  </span>
-                </button>
-              ))
-            )}
-          </div>
-        </article>
+            <span>{module.eyebrow}</span>
+            <strong>{module.title}</strong>
+            <p>{module.description}</p>
+            <small>
+              {module.state} <b>→</b>
+            </small>
+          </button>
+        ))}
       </section>
+
+      <section className="surface supply-chain-card">
+        <div className="surface-heading">
+          <div>
+            <span className="section-kicker">ONE SUPPLY CHAIN</span>
+            <h2>부산 수산 부산물 통합 공급망</h2>
+          </div>
+          <span className="weather-place">
+            {weather?.location ?? "부산광역시"}
+          </span>
+        </div>
+        <div className="pipeline">
+          {pipelineStages.map(([no, label, count, detail], index) => (
+            <div className="pipeline-stage" key={label}>
+              <div className={`stage-ring stage-${index}`}>
+                <span>{no}</span>
+                <strong>{count}</strong>
+              </div>
+              <b>{label}</b>
+              <small>{detail}</small>
+              {index < pipelineStages.length - 1 && (
+                <i className="stage-connector" />
+              )}
+            </div>
+          ))}
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function AdminOperationsWorkspace({
+  notify,
+  requests,
+  supabase,
+  onChanged,
+}: {
+  notify: (message: string) => void;
+  requests: DbWasteRequest[];
+  supabase: SupabaseClient;
+  onChanged: () => Promise<void>;
+}) {
+  const pendingCount = requests.filter(
+    (request) => request.status === "requested",
+  ).length;
+  const movingCount = requests.filter((request) =>
+    ["assigned", "collecting", "collected", "in_transit"].includes(
+      request.status,
+    ),
+  ).length;
+
+  return (
+    <div className="page-stack">
+      <section className="workspace-title compact-title">
+        <div>
+          <span className="page-kicker">SIMPLE COLLECTION CONTROL</span>
+          <h1>수거 운영</h1>
+          <p>요청 선택 → 기사·차량 선택 → 배차 확정, 세 단계만 진행하세요.</p>
+        </div>
+        <div className="simple-counts">
+          <span>
+            배차 대기 <strong>{pendingCount}</strong>
+          </span>
+          <span>
+            운행 중 <strong>{movingCount}</strong>
+          </span>
+        </div>
+      </section>
+
+      <section className="simple-steps" aria-label="배차 순서">
+        {[
+          ["1", "요청 선택", "접수된 부산물 확인"],
+          ["2", "기사·차량 선택", "가용 자원 배정"],
+          ["3", "배차 확정", "기사 화면에 즉시 전달"],
+        ].map(([step, title, detail]) => (
+          <div key={step}>
+            <span>{step}</span>
+            <strong>{title}</strong>
+            <small>{detail}</small>
+          </div>
+        ))}
+      </section>
+
       <AdminDispatchPanel
         supabase={supabase}
         requests={requests}
         notify={notify}
         onChanged={onChanged}
       />
+
+      <article className="surface compact-request-card">
+        <div className="surface-heading">
+          <div>
+            <span className="section-kicker">RECENT REQUESTS</span>
+            <h2>최근 요청</h2>
+          </div>
+          <span className="number-pill">{requests.length}</span>
+        </div>
+        <div className="compact-request-list">
+          {requests.slice(0, 6).map((request) => (
+            <div key={request.id}>
+              <span>
+                <strong>{request.request_number}</strong>
+                <small>{getOrganizationName(request.organizations)}</small>
+              </span>
+              <span>{request.waste_type}</span>
+              <b>
+                {Number(request.estimated_weight_kg).toLocaleString()}kg
+              </b>
+              <StatusBadge
+                status={requestStatusLabel[request.status] ?? request.status}
+              />
+            </div>
+          ))}
+          {requests.length === 0 && (
+            <p className="request-empty">등록된 수거 요청이 없습니다.</p>
+          )}
+        </div>
+      </article>
+
+      <AdminInvitePanel supabase={supabase} notify={notify} />
+    </div>
+  );
+}
+
+function AiForecastWorkspace({
+  requests,
+  notify,
+}: {
+  requests: DbWasteRequest[];
+  notify: (message: string) => void;
+}) {
+  const registeredTons =
+    requests.reduce(
+      (sum, request) => sum + Number(request.estimated_weight_kg || 0),
+      0,
+    ) / 1000;
+  const auctionForecast = [38.2, 41.6, 44.1, 42.8, 46.5, 49.2, 43.7];
+  const maxForecast = Math.max(...auctionForecast);
+  const byproductForecast = auctionForecast[1] * 0.16;
+  const requiredVehicles = Math.max(1, Math.ceil(byproductForecast / 2.5));
+  const logisticsTargets = [...requests]
+    .filter((request) => request.status === "requested")
+    .sort(
+      (a, b) =>
+        Number(b.estimated_weight_kg) - Number(a.estimated_weight_kg),
+    )
+    .slice(0, 4);
+
+  return (
+    <div className="page-stack">
+      <section className="workspace-title compact-title">
+        <div>
+          <span className="page-kicker">AI SUPPLY FORECAST</span>
+          <h1>위판량·부산물·물류 예측</h1>
+          <p>
+            부산 공동어시장 위판 흐름과 실제 등록 데이터를 결합해 다음 수거
+            물량을 계획합니다.
+          </p>
+        </div>
+        <span className="model-chip">AI 예측 시뮬레이션</span>
+      </section>
+
+      <section className="metric-row">
+        <MiniMetric
+          label="내일 위판량 예측"
+          value={`${auctionForecast[1]}t`}
+          note="예시 학습 데이터 기준"
+          accent="mint"
+        />
+        <MiniMetric
+          label="부산물 발생 예측"
+          value={`${byproductForecast.toFixed(1)}t`}
+          note="위판량의 약 16%"
+          accent="orange"
+        />
+        <MiniMetric
+          label="현재 등록 물량"
+          value={`${registeredTons.toFixed(1)}t`}
+          note="Supabase 실제 데이터"
+          accent="blue"
+        />
+        <MiniMetric
+          label="권장 차량"
+          value={`${requiredVehicles}대`}
+          note="2.5t 적재 기준"
+          accent="violet"
+        />
+      </section>
+
+      <section className="forecast-layout">
+        <article className="surface forecast-card">
+          <div className="surface-heading">
+            <div>
+              <span className="section-kicker">7-DAY AUCTION FORECAST</span>
+              <h2>부산 위판량 7일 예측</h2>
+            </div>
+            <button
+              className="quiet-button"
+              onClick={() =>
+                notify("공공·위판 데이터 API 연결 후 자동 갱신됩니다.")
+              }
+            >
+              데이터 안내
+            </button>
+          </div>
+          <div className="forecast-chart">
+            {auctionForecast.map((value, index) => (
+              <div key={`${value}-${index}`}>
+                <strong>{value}</strong>
+                <i style={{ height: `${(value / maxForecast) * 100}%` }} />
+                <span>
+                  {new Intl.DateTimeFormat("ko-KR", {
+                    weekday: "short",
+                  }).format(new Date(Date.now() + index * 86400000))}
+                </span>
+              </div>
+            ))}
+          </div>
+        </article>
+
+        <article className="surface ai-insight-card">
+          <div className="surface-heading">
+            <div>
+              <span className="section-kicker">BYPRODUCT ANALYSIS</span>
+              <h2>부산물 발생 분석</h2>
+            </div>
+            <span className="weather-place">AI 권고</span>
+          </div>
+          <div className="insight-list">
+            <div>
+              <span>01</span>
+              <p>
+                <strong>새벽 위판 직후 집중 수거</strong>
+                <small>공동어시장·자갈치권 06:00–09:00 권장</small>
+              </p>
+            </div>
+            <div>
+              <span>02</span>
+              <p>
+                <strong>고지방 어류 부산물 분리</strong>
+                <small>혼합소화 시 메탄 수율 향상 원료로 우선 투입</small>
+              </p>
+            </div>
+            <div>
+              <span>03</span>
+              <p>
+                <strong>당일 반입 원칙</strong>
+                <small>부패·악취 위험을 줄이도록 12시간 내 운송</small>
+              </p>
+            </div>
+          </div>
+        </article>
+
+        <article className="surface logistics-priority">
+          <div className="surface-heading">
+            <div>
+              <span className="section-kicker">LOGISTICS OPTIMIZATION</span>
+              <h2>AI 수거 우선순위</h2>
+            </div>
+            <span className="route-saving">Kakao 경로 연동</span>
+          </div>
+          <div className="priority-list">
+            {logisticsTargets.map((request, index) => (
+              <div key={request.id}>
+                <span>{index + 1}</span>
+                <p>
+                  <strong>{getOrganizationName(request.organizations)}</strong>
+                  <small>
+                    {request.waste_type} · {request.request_number}
+                  </small>
+                </p>
+                <b>
+                  {Number(request.estimated_weight_kg).toLocaleString()}kg
+                </b>
+              </div>
+            ))}
+            {logisticsTargets.length === 0 && (
+              <p className="request-empty">배차 대기 요청이 없습니다.</p>
+            )}
+          </div>
+        </article>
+      </section>
+    </div>
+  );
+}
+
+function ResourceEnergyWorkspace({ requests }: { requests: DbWasteRequest[] }) {
+  const feedstockTons =
+    requests
+      .filter((request) =>
+        ["collected", "in_transit", "received", "processing", "completed"].includes(
+          request.status,
+        ),
+      )
+      .reduce(
+        (sum, request) => sum + Number(request.estimated_weight_kg || 0),
+        0,
+      ) / 1000;
+  const biogasForecast = feedstockTons * 82;
+  const powerForecast = biogasForecast * 0.62 * 2.05;
+
+  return (
+    <div className="page-stack">
+      <section className="workspace-title compact-title">
+        <div>
+          <span className="page-kicker">BIOGAS & ESS CONTROL</span>
+          <h1>자원화·에너지 운영</h1>
+          <p>
+            수거된 수산 부산물을 혼합소화 원료로 배합하고 바이오가스와 ESS
+            운영 계획으로 연결합니다.
+          </p>
+        </div>
+        <span className="model-chip green">AI 제어 권고</span>
+      </section>
+
+      <section className="metric-row">
+        <MiniMetric
+          label="확보 원료"
+          value={`${feedstockTons.toFixed(2)}t`}
+          note="수거 이후 실제 흐름"
+          accent="mint"
+        />
+        <MiniMetric
+          label="바이오가스 예측"
+          value={`${biogasForecast.toFixed(0)}Nm³`}
+          note="원료 특성 기반 추정"
+          accent="orange"
+        />
+        <MiniMetric
+          label="발전량 예측"
+          value={`${powerForecast.toFixed(0)}kWh`}
+          note="메탄 62% 가정"
+          accent="blue"
+        />
+        <MiniMetric
+          label="ESS 충전율"
+          value="68%"
+          note="BMS 연결 전 예시값"
+          accent="violet"
+        />
+      </section>
+
+      <section className="energy-layout">
+        <article className="surface digestion-card">
+          <div className="surface-heading">
+            <div>
+              <span className="section-kicker">CO-DIGESTION CONTROL</span>
+              <h2>AI 혼합소화 배합</h2>
+            </div>
+            <span className="weather-place">권장 운전값</span>
+          </div>
+          <div className="mix-ratio">
+            {[
+              ["수산 부산물", 35, "고지방·고단백"],
+              ["음식물류", 45, "탄소원 보완"],
+              ["하수 슬러지", 20, "미생물 안정화"],
+            ].map(([label, ratio, detail]) => (
+              <div key={String(label)}>
+                <span>
+                  <strong>{label}</strong>
+                  <b>{ratio}%</b>
+                </span>
+                <i>
+                  <em style={{ width: `${ratio}%` }} />
+                </i>
+                <small>{detail}</small>
+              </div>
+            ))}
+          </div>
+          <div className="control-values">
+            <span>
+              목표 pH <strong>7.2</strong>
+            </span>
+            <span>
+              유기물 부하 <strong>2.8 kgVS/m³·d</strong>
+            </span>
+            <span>
+              체류시간 <strong>24일</strong>
+            </span>
+          </div>
+        </article>
+
+        <article className="surface ess-card">
+          <div className="surface-heading">
+            <div>
+              <span className="section-kicker">ESS OPERATION</span>
+              <h2>ESS 충·방전 계획</h2>
+            </div>
+            <span className="weather-place">SOC 68%</span>
+          </div>
+          <div className="battery-visual">
+            <div>
+              <i />
+              <span>68%</span>
+            </div>
+            <p>
+              <strong>현재: 대기</strong>
+              <small>바이오가스 발전 잉여전력 충전 준비</small>
+            </p>
+          </div>
+          <div className="ess-schedule">
+            <span>
+              02–05시 <b>충전</b>
+            </span>
+            <span>
+              14–17시 <b>피크 절감</b>
+            </span>
+            <span>
+              비상 시 <b>시설 백업</b>
+            </span>
+          </div>
+        </article>
+
+        <article className="surface energy-flow-card">
+          <div className="surface-heading">
+            <div>
+              <span className="section-kicker">RESOURCE TO ENERGY</span>
+              <h2>부산 자원순환 에너지 흐름</h2>
+            </div>
+          </div>
+          <div className="energy-flow">
+            {[
+              ["수산 부산물", `${feedstockTons.toFixed(2)}t`],
+              ["혼합소화", "AI 배합"],
+              ["바이오가스", `${biogasForecast.toFixed(0)}Nm³`],
+              ["열병합 발전", `${powerForecast.toFixed(0)}kWh`],
+              ["ESS", "저장·피크 대응"],
+            ].map(([label, value], index) => (
+              <div key={label}>
+                <span>{index + 1}</span>
+                <strong>{label}</strong>
+                <small>{value}</small>
+                {index < 4 && <b>→</b>}
+              </div>
+            ))}
+          </div>
+          <p className="integration-note">
+            혼합소화 설비 PLC와 ESS BMS API가 연결되면 권고값을 실제 제어값과
+            실시간 상태로 전환할 수 있습니다.
+          </p>
+        </article>
+      </section>
     </div>
   );
 }
@@ -3398,24 +3850,15 @@ export default function Home() {
   }, []);
 
   const visibleNavigation = useMemo(() => {
-    if (!profile || profile.role === "admin") return navigation;
-    const allowedWorkspace: Record<Exclude<UserRole, "admin">, Workspace> = {
-      discharger: "discharger",
-      driver: "driver",
-      facility: "facility",
-    };
-    return navigation.filter(
-      (item) =>
-        item.id ===
-        allowedWorkspace[profile.role as Exclude<UserRole, "admin">],
-    );
+    if (!profile || profile.role === "admin") return adminNavigation;
+    return roleNavigation[profile.role as Exclude<UserRole, "admin">];
   }, [profile]);
 
   const current = useMemo(
     () =>
       visibleNavigation.find((item) => item.id === workspace) ??
       visibleNavigation[0] ??
-      navigation[0],
+      adminNavigation[0],
     [visibleNavigation, workspace],
   );
 
@@ -3548,13 +3991,25 @@ export default function Home() {
         <div className="content">
           {workspace === "overview" && (
             <AdminOverview
-              notify={notify}
               requests={requests}
               weather={weather}
               weatherLoading={weatherLoading}
+              onNavigate={setWorkspace}
+            />
+          )}
+          {workspace === "operations" && (
+            <AdminOperationsWorkspace
+              notify={notify}
+              requests={requests}
               supabase={supabase}
               onChanged={loadRequests}
             />
+          )}
+          {workspace === "forecast" && (
+            <AiForecastWorkspace requests={requests} notify={notify} />
+          )}
+          {workspace === "energy" && (
+            <ResourceEnergyWorkspace requests={requests} />
           )}
           {workspace === "discharger" && (
             <DischargerWorkspace
@@ -3589,8 +4044,14 @@ export default function Home() {
           )}
         </div>
 
-        <nav className="mobile-nav" aria-label="모바일 업무 메뉴">
-          {visibleNavigation.slice(0, 4).map((item) => (
+        <nav
+          className="mobile-nav"
+          aria-label="모바일 업무 메뉴"
+          style={{
+            gridTemplateColumns: `repeat(${visibleNavigation.length}, minmax(0, 1fr))`,
+          }}
+        >
+          {visibleNavigation.map((item) => (
             <button
               key={item.id}
               className={workspace === item.id ? "active" : ""}

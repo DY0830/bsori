@@ -12,9 +12,9 @@ export async function generateMetadata(): Promise<Metadata> {
     requestHeaders.get("x-forwarded-proto") ??
     (host.startsWith("localhost") ? "http" : "https");
   const origin = `${protocol}://${host}`;
-  const title = "B.SORI | 수산 부산물 통합 관리 플랫폼";
+  const title = "B.SORI | 부산 수산 부산물 AI 자원순환 플랫폼";
   const description =
-    "배출업체, 수거기사, 자원화시설, 관리자를 연결하는 수산 부산물 등록·수거·반입·처리 통합 웹 시스템";
+    "부산 위판량 예측, 부산물 발생 분석, 수거 물류 최적화, 혼합소화와 바이오가스·ESS 운영을 연결하는 통합 관리 플랫폼";
 
   return {
     title,
@@ -30,7 +30,7 @@ export async function generateMetadata(): Promise<Metadata> {
           url: `${origin}/og.png`,
           width: 1717,
           height: 916,
-          alt: "B.SORI 수산 부산물 통합 관리 플랫폼",
+          alt: "B.SORI 부산 수산 부산물 AI 자원순환 플랫폼",
         },
       ],
     },
