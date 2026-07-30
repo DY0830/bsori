@@ -1,6 +1,15 @@
 "use client";
 
-import { ChangeEvent, FormEvent, useEffect, useMemo, useState } from "react";
+import {
+  ChangeEvent,
+  FormEvent,
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+} from "react";
+import type { SupabaseClient, User } from "@supabase/supabase-js";
+import { createClient } from "@/utils/supabase/client";
 
 type Workspace =
   | "overview"
@@ -9,6 +18,33 @@ type Workspace =
   | "facility"
   | "integrations";
 type DriverTaskStatus = "대기" | "이동 중" | "도착" | "수거 완료";
+type UserRole = "discharger" | "driver" | "facility" | "admin";
+
+type Profile = {
+  id: string;
+  organization_id: string;
+  role: UserRole;
+  full_name: string;
+  phone: string | null;
+  is_active: boolean;
+  organizations: { name: string } | { name: string }[] | null;
+};
+
+type DbWasteRequest = {
+  id: string;
+  request_number: string;
+  waste_type: string;
+  estimated_weight_kg: number;
+  status: string;
+  created_at: string;
+  organizations: { name: string } | { name: string }[] | null;
+};
+
+type Organization = {
+  id: string;
+  name: string;
+  organization_type: UserRole;
+};
 
 const navigation: {
   id: Workspace;
@@ -131,6 +167,477 @@ const integrations = [
   },
 ];
 
+const roleLabel: Record<UserRole, string> = {
+  discharger: "배출업체",
+  driver: "수거기사",
+  facility: "자원화시설",
+  admin: "관리자",
+};
+
+const requestStatusLabel: Record<string, string> = {
+  requested: "접수 완료",
+  assigned: "배차 완료",
+  collecting: "수거 중",
+  collected: "수거 완료",
+  in_transit: "운송 중",
+  received: "반입 완료",
+  processing: "처리 중",
+  completed: "처리 완료",
+  cancelled: "취소",
+};
+
+function getOrganizationName(
+  organization: Profile["organizations"] | DbWasteRequest["organizations"],
+) {
+  if (Array.isArray(organization)) {
+    return organization[0]?.name ?? "소속 미지정";
+  }
+  return organization?.name ?? "소속 미지정";
+}
+
+function AuthPanel({
+  supabase,
+  onReady,
+}: {
+  supabase: SupabaseClient;
+  onReady: (user: User) => Promise<void>;
+}) {
+  const [mode, setMode] = useState<"login" | "bootstrap" | "activate">(
+    "login",
+  );
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState("");
+  const [error, setError] = useState("");
+
+  const completePendingProfile = async () => {
+    const inviteToken = window.localStorage.getItem("bsori-invite-token");
+    const bootstrapRaw = window.localStorage.getItem("bsori-bootstrap");
+
+    if (inviteToken) {
+      const { error: inviteError } = await supabase.rpc(
+        "accept_account_invitation",
+        { p_token: inviteToken },
+      );
+      if (inviteError) throw inviteError;
+      window.localStorage.removeItem("bsori-invite-token");
+    } else if (bootstrapRaw) {
+      const bootstrap = JSON.parse(bootstrapRaw) as {
+        fullName: string;
+        phone: string;
+      };
+      const { error: bootstrapError } = await supabase.rpc(
+        "bootstrap_first_admin",
+        {
+          p_full_name: bootstrap.fullName,
+          p_phone: bootstrap.phone || null,
+        },
+      );
+      if (bootstrapError) throw bootstrapError;
+      window.localStorage.removeItem("bsori-bootstrap");
+    }
+  };
+
+  const submitLogin = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setBusy(true);
+    setError("");
+    setMessage("");
+
+    const form = new FormData(event.currentTarget);
+    const email = String(form.get("email") ?? "").trim();
+    const password = String(form.get("password") ?? "");
+
+    try {
+      const { data, error: loginError } =
+        await supabase.auth.signInWithPassword({ email, password });
+      if (loginError) throw loginError;
+      if (!data.user) throw new Error("로그인 사용자를 확인하지 못했습니다.");
+
+      await completePendingProfile();
+      await onReady(data.user);
+    } catch (caught) {
+      setError(
+        caught instanceof Error
+          ? caught.message
+          : "로그인 중 오류가 발생했습니다.",
+      );
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const submitBootstrap = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setBusy(true);
+    setError("");
+    setMessage("");
+
+    const form = new FormData(event.currentTarget);
+    const email = String(form.get("email") ?? "").trim();
+    const password = String(form.get("password") ?? "");
+    const fullName = String(form.get("fullName") ?? "").trim();
+    const phone = String(form.get("phone") ?? "").trim();
+
+    try {
+      window.localStorage.setItem(
+        "bsori-bootstrap",
+        JSON.stringify({ fullName, phone }),
+      );
+      const { data, error: signupError } = await supabase.auth.signUp({
+        email,
+        password,
+      });
+      if (signupError) throw signupError;
+
+      if (data.session && data.user) {
+        await completePendingProfile();
+        await onReady(data.user);
+      } else {
+        setMessage(
+          "인증 메일을 확인한 뒤 로그인해 주세요. 첫 로그인 시 관리자 권한이 자동으로 연결됩니다.",
+        );
+        setMode("login");
+      }
+    } catch (caught) {
+      setError(
+        caught instanceof Error
+          ? caught.message
+          : "초기 관리자 등록 중 오류가 발생했습니다.",
+      );
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const submitActivation = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setBusy(true);
+    setError("");
+    setMessage("");
+
+    const form = new FormData(event.currentTarget);
+    const email = String(form.get("email") ?? "").trim();
+    const password = String(form.get("password") ?? "");
+    const inviteToken = String(form.get("inviteToken") ?? "").trim();
+
+    try {
+      window.localStorage.setItem("bsori-invite-token", inviteToken);
+      const { data, error: signupError } = await supabase.auth.signUp({
+        email,
+        password,
+      });
+      if (signupError) throw signupError;
+
+      if (data.session && data.user) {
+        await completePendingProfile();
+        await onReady(data.user);
+      } else {
+        setMessage(
+          "인증 메일을 확인한 뒤 로그인해 주세요. 첫 로그인 시 초대받은 업체와 역할이 연결됩니다.",
+        );
+        setMode("login");
+      }
+    } catch (caught) {
+      setError(
+        caught instanceof Error
+          ? caught.message
+          : "초대 계정 활성화 중 오류가 발생했습니다.",
+      );
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <main className="auth-shell">
+      <section className="auth-brand-panel">
+        <span className="brand-mark">B</span>
+        <p>BLUE RESOURCE CYCLE</p>
+        <h1>
+          부산 수산 부산물
+          <br />
+          통합 관리 플랫폼
+        </h1>
+        <div className="auth-flow">
+          <span>등록</span>
+          <i />
+          <span>수거</span>
+          <i />
+          <span>반입</span>
+          <i />
+          <span>처리</span>
+        </div>
+      </section>
+
+      <section className="auth-card">
+        <span className="page-kicker">SECURE WORKSPACE</span>
+        <h2>
+          {mode === "login" && "B.SORI 로그인"}
+          {mode === "bootstrap" && "초기 관리자 등록"}
+          {mode === "activate" && "초대 계정 활성화"}
+        </h2>
+        <p>
+          {mode === "login" &&
+            "관리자가 등록한 이메일 계정으로 로그인하세요."}
+          {mode === "bootstrap" &&
+            "최초 한 번만 운영본부 관리자 계정을 만들 수 있습니다."}
+          {mode === "activate" &&
+            "관리자에게 받은 이메일과 초대 코드를 입력하세요."}
+        </p>
+
+        {mode === "login" && (
+          <form className="auth-form" onSubmit={submitLogin}>
+            <label>
+              <span>이메일</span>
+              <input name="email" type="email" autoComplete="email" required />
+            </label>
+            <label>
+              <span>비밀번호</span>
+              <input
+                name="password"
+                type="password"
+                autoComplete="current-password"
+                minLength={8}
+                required
+              />
+            </label>
+            <button className="primary-action" disabled={busy}>
+              {busy ? "로그인 확인 중..." : "로그인"}
+            </button>
+          </form>
+        )}
+
+        {mode === "bootstrap" && (
+          <form className="auth-form" onSubmit={submitBootstrap}>
+            <label>
+              <span>관리자 이름</span>
+              <input name="fullName" required />
+            </label>
+            <label>
+              <span>연락처</span>
+              <input name="phone" placeholder="010-0000-0000" />
+            </label>
+            <label>
+              <span>이메일</span>
+              <input name="email" type="email" autoComplete="email" required />
+            </label>
+            <label>
+              <span>비밀번호</span>
+              <input
+                name="password"
+                type="password"
+                autoComplete="new-password"
+                minLength={8}
+                required
+              />
+            </label>
+            <button className="primary-action" disabled={busy}>
+              {busy ? "관리자 생성 중..." : "초기 관리자 만들기"}
+            </button>
+          </form>
+        )}
+
+        {mode === "activate" && (
+          <form className="auth-form" onSubmit={submitActivation}>
+            <label>
+              <span>초대받은 이메일</span>
+              <input name="email" type="email" autoComplete="email" required />
+            </label>
+            <label>
+              <span>초대 코드</span>
+              <input name="inviteToken" autoComplete="one-time-code" required />
+            </label>
+            <label>
+              <span>새 비밀번호</span>
+              <input
+                name="password"
+                type="password"
+                autoComplete="new-password"
+                minLength={8}
+                required
+              />
+            </label>
+            <button className="primary-action" disabled={busy}>
+              {busy ? "계정 연결 중..." : "계정 활성화"}
+            </button>
+          </form>
+        )}
+
+        {message && <p className="auth-message success">{message}</p>}
+        {error && <p className="auth-message error">{error}</p>}
+
+        <div className="auth-switches">
+          {mode !== "login" && (
+            <button type="button" onClick={() => setMode("login")}>
+              로그인으로 돌아가기
+            </button>
+          )}
+          {mode === "login" && (
+            <>
+              <button type="button" onClick={() => setMode("activate")}>
+                초대 코드가 있어요
+              </button>
+              <button type="button" onClick={() => setMode("bootstrap")}>
+                최초 관리자 설정
+              </button>
+            </>
+          )}
+        </div>
+      </section>
+    </main>
+  );
+}
+
+function AdminInvitePanel({
+  supabase,
+  notify,
+}: {
+  supabase: SupabaseClient;
+  notify: (message: string) => void;
+}) {
+  const [organizations, setOrganizations] = useState<Organization[]>([]);
+  const [role, setRole] = useState<UserRole>("discharger");
+  const [organizationId, setOrganizationId] = useState("");
+  const [inviteToken, setInviteToken] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    void supabase
+      .from("organizations")
+      .select("id, name, organization_type")
+      .order("name")
+      .then(({ data }) => {
+        const items = (data ?? []) as Organization[];
+        setOrganizations(items);
+        const first = items.find(
+          (organization) => organization.organization_type === role,
+        );
+        setOrganizationId(first?.id ?? "");
+      });
+  }, [supabase]);
+
+  const changeRole = (nextRole: UserRole) => {
+    setRole(nextRole);
+    const matching = organizations.find(
+      (organization) => organization.organization_type === nextRole,
+    );
+    setOrganizationId(matching?.id ?? "");
+  };
+
+  const createInvitation = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const formElement = event.currentTarget;
+    setBusy(true);
+    setInviteToken("");
+
+    const form = new FormData(formElement);
+    const { data, error } = await supabase.rpc("create_account_invitation", {
+      p_email: String(form.get("email") ?? "").trim(),
+      p_full_name: String(form.get("fullName") ?? "").trim(),
+      p_phone: String(form.get("phone") ?? "").trim() || null,
+      p_role: role,
+      p_organization_id: organizationId,
+    });
+
+    setBusy(false);
+
+    if (error) {
+      notify(error.message);
+      return;
+    }
+
+    const result = Array.isArray(data) ? data[0] : data;
+    const token =
+      result && typeof result === "object" && "invite_token" in result
+        ? String(result.invite_token)
+        : "";
+    setInviteToken(token);
+    notify("사용자 초대 코드가 생성되었습니다.");
+    formElement.reset();
+  };
+
+  const filteredOrganizations = organizations.filter(
+    (organization) =>
+      organization.organization_type === role ||
+      (role === "admin" && organization.organization_type === "admin"),
+  );
+
+  return (
+    <section className="surface invite-panel">
+      <div className="surface-heading">
+        <div>
+          <span className="section-kicker">ACCOUNT CONTROL</span>
+          <h2>사용자 계정 초대</h2>
+        </div>
+        <span className="number-pill">{organizations.length}개 업체</span>
+      </div>
+      <p className="invite-description">
+        관리자가 사용자와 업체 역할을 지정합니다. 비밀번호는 사용자가 초대
+        코드를 통해 직접 설정합니다.
+      </p>
+      <form className="invite-form" onSubmit={createInvitation}>
+        <label>
+          <span>사용자 이름</span>
+          <input name="fullName" required />
+        </label>
+        <label>
+          <span>이메일</span>
+          <input name="email" type="email" required />
+        </label>
+        <label>
+          <span>연락처</span>
+          <input name="phone" placeholder="010-0000-0000" />
+        </label>
+        <label>
+          <span>역할</span>
+          <select
+            value={role}
+            onChange={(event) => changeRole(event.target.value as UserRole)}
+          >
+            <option value="discharger">배출업체</option>
+            <option value="driver">수거기사</option>
+            <option value="facility">자원화시설</option>
+            <option value="admin">관리자</option>
+          </select>
+        </label>
+        <label className="full">
+          <span>소속 업체</span>
+          <select
+            value={organizationId}
+            onChange={(event) => setOrganizationId(event.target.value)}
+            required
+          >
+            {filteredOrganizations.map((organization) => (
+              <option key={organization.id} value={organization.id}>
+                {organization.name}
+              </option>
+            ))}
+          </select>
+        </label>
+        <button className="primary-action full" disabled={busy}>
+          {busy ? "초대 생성 중..." : "초대 코드 생성"}
+        </button>
+      </form>
+      {inviteToken && (
+        <div className="invite-result">
+          <span>1회용 초대 코드</span>
+          <strong>{inviteToken}</strong>
+          <button
+            type="button"
+            onClick={() => {
+              void navigator.clipboard.writeText(inviteToken);
+              notify("초대 코드를 복사했습니다.");
+            }}
+          >
+            코드 복사
+          </button>
+          <small>7일 안에 계정 활성화 화면에서 사용해야 합니다.</small>
+        </div>
+      )}
+    </section>
+  );
+}
+
 function StatusBadge({ status }: { status: string }) {
   return (
     <span className={`status-badge ${statusTone[status] ?? "gray"}`}>
@@ -163,7 +670,13 @@ function MiniMetric({
   );
 }
 
-function AdminOverview({ notify }: { notify: (message: string) => void }) {
+function AdminOverview({
+  notify,
+  requests,
+}: {
+  notify: (message: string) => void;
+  requests: DbWasteRequest[];
+}) {
   return (
     <div className="page-stack">
       <section className="page-hero admin-hero">
@@ -318,28 +831,53 @@ function AdminOverview({ notify }: { notify: (message: string) => void }) {
               <span>상태</span>
               <span>업데이트</span>
             </div>
-            {adminRequests.map((request) => (
-              <button
-                className="request-row"
-                role="row"
-                key={request.id}
-                onClick={() => notify(`${request.id} 상세 정보를 열었습니다.`)}
-              >
-                <span>
-                  <b>{request.id}</b>
-                </span>
-                <span>
-                  <strong>{request.company}</strong>
-                  <small>{request.type}</small>
-                </span>
-                <span>{request.amount}</span>
-                <span>{request.driver}</span>
-                <span>
-                  <StatusBadge status={request.status} />
-                </span>
-                <span>{request.updated}</span>
-              </button>
-            ))}
+            {requests.length === 0 ? (
+              <div className="request-empty">
+                실제 DB에 등록된 수거 요청이 아직 없습니다.
+              </div>
+            ) : (
+              requests.map((request) => (
+                <button
+                  className="request-row"
+                  role="row"
+                  key={request.id}
+                  onClick={() =>
+                    notify(
+                      `${request.request_number} 상세 정보를 열었습니다.`,
+                    )
+                  }
+                >
+                  <span>
+                    <b>{request.request_number}</b>
+                  </span>
+                  <span>
+                    <strong>
+                      {getOrganizationName(request.organizations)}
+                    </strong>
+                    <small>{request.waste_type}</small>
+                  </span>
+                  <span>
+                    {Number(request.estimated_weight_kg).toLocaleString()} kg
+                  </span>
+                  <span>배차 대기</span>
+                  <span>
+                    <StatusBadge
+                      status={
+                        requestStatusLabel[request.status] ?? request.status
+                      }
+                    />
+                  </span>
+                  <span>
+                    {new Date(request.created_at).toLocaleString("ko-KR", {
+                      month: "2-digit",
+                      day: "2-digit",
+                      hour: "2-digit",
+                      minute: "2-digit",
+                    })}
+                  </span>
+                </button>
+              ))
+            )}
           </div>
         </article>
       </section>
@@ -349,25 +887,99 @@ function AdminOverview({ notify }: { notify: (message: string) => void }) {
 
 function DischargerWorkspace({
   notify,
+  supabase,
+  profile,
+  onCreated,
 }: {
   notify: (message: string) => void;
+  supabase: SupabaseClient;
+  profile: Profile;
+  onCreated: () => Promise<void>;
 }) {
   const [photoName, setPhotoName] = useState("");
+  const [photo, setPhoto] = useState<File | null>(null);
   const [analyzed, setAnalyzed] = useState(false);
-  const [registered, setRegistered] = useState(false);
+  const [registered, setRegistered] = useState("");
+  const [saving, setSaving] = useState(false);
 
   const handlePhoto = (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (file) {
+      if (file.size > 10 * 1024 * 1024) {
+        notify("사진은 최대 10MB까지 업로드할 수 있습니다.");
+        event.target.value = "";
+        return;
+      }
+      setPhoto(file);
       setPhotoName(file.name);
       setAnalyzed(false);
     }
   };
 
-  const submit = (event: FormEvent<HTMLFormElement>) => {
+  const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    setRegistered(true);
-    notify("수거 요청 REQ-0730-019가 임시 등록되었습니다.");
+    setSaving(true);
+    setRegistered("");
+
+    const form = new FormData(event.currentTarget);
+    let photoPath: string | null = null;
+
+    try {
+      if (photo) {
+        const extension = photo.name.split(".").pop()?.toLowerCase() || "jpg";
+        photoPath = `${profile.id}/${crypto.randomUUID()}.${extension}`;
+        const { error: uploadError } = await supabase.storage
+          .from("waste-photos")
+          .upload(photoPath, photo, {
+            contentType: photo.type || "image/jpeg",
+            upsert: false,
+          });
+        if (uploadError) throw uploadError;
+      }
+
+      const datePart = new Date()
+        .toISOString()
+        .slice(0, 10)
+        .replaceAll("-", "");
+      const requestNumber = `REQ-${datePart}-${crypto
+        .randomUUID()
+        .slice(0, 6)
+        .toUpperCase()}`;
+
+      const { error: insertError } = await supabase
+        .from("waste_requests")
+        .insert({
+          request_number: requestNumber,
+          organization_id: profile.organization_id,
+          created_by: profile.id,
+          waste_type: String(form.get("wasteType") ?? ""),
+          estimated_weight_kg: Number(form.get("estimatedWeight")),
+          storage_condition: String(form.get("storageCondition") ?? ""),
+          preferred_pickup_at:
+            String(form.get("preferredPickupAt") ?? "") || null,
+          pickup_address: String(form.get("pickupAddress") ?? ""),
+          memo: String(form.get("memo") ?? ""),
+          photo_path: photoPath,
+          status: "requested",
+        });
+
+      if (insertError) throw insertError;
+
+      setRegistered(requestNumber);
+      notify(`수거 요청 ${requestNumber}가 실제 DB에 저장되었습니다.`);
+      await onCreated();
+    } catch (caught) {
+      if (photoPath) {
+        await supabase.storage.from("waste-photos").remove([photoPath]);
+      }
+      notify(
+        caught instanceof Error
+          ? caught.message
+          : "수거 요청 저장 중 오류가 발생했습니다.",
+      );
+    } finally {
+      setSaving(false);
+    }
   };
 
   return (
@@ -381,8 +993,8 @@ function DischargerWorkspace({
         <div className="role-chip">
           <span className="role-avatar company">해</span>
           <div>
-            <strong>해원수산</strong>
-            <small>배출업체 담당자</small>
+            <strong>{getOrganizationName(profile.organizations)}</strong>
+            <small>{profile.full_name} · 배출업체 담당자</small>
           </div>
         </div>
       </section>
@@ -399,7 +1011,7 @@ function DischargerWorkspace({
           <div className="form-grid">
             <label>
               <span>부산물 종류 *</span>
-              <select defaultValue="생선 내장">
+              <select name="wasteType" defaultValue="생선 내장">
                 <option>생선 내장</option>
                 <option>어류 뼈·머리</option>
                 <option>갑각류 껍질</option>
@@ -409,13 +1021,19 @@ function DischargerWorkspace({
             <label>
               <span>예상 수량 *</span>
               <div className="input-unit">
-                <input type="number" defaultValue="420" min="1" />
+                <input
+                  name="estimatedWeight"
+                  type="number"
+                  defaultValue="420"
+                  min="1"
+                  required
+                />
                 <b>kg</b>
               </div>
             </label>
             <label>
               <span>보관 상태</span>
-              <select defaultValue="냉장">
+              <select name="storageCondition" defaultValue="냉장">
                 <option>냉장</option>
                 <option>냉동</option>
                 <option>상온</option>
@@ -423,12 +1041,20 @@ function DischargerWorkspace({
             </label>
             <label>
               <span>수거 희망 시간</span>
-              <input type="datetime-local" defaultValue="2026-07-30T16:00" />
+              <input
+                name="preferredPickupAt"
+                type="datetime-local"
+                defaultValue="2026-07-30T16:00"
+              />
             </label>
             <label className="full">
               <span>수거 주소 *</span>
               <div className="address-input">
-                <input defaultValue="부산광역시 영도구 해양로 24" />
+                <input
+                  name="pickupAddress"
+                  defaultValue="부산광역시 영도구 해양로 24"
+                  required
+                />
                 <button
                   type="button"
                   onClick={() =>
@@ -441,7 +1067,10 @@ function DischargerWorkspace({
             </label>
             <label className="full">
               <span>현장 메모</span>
-              <textarea defaultValue="3번 냉장창고 앞 파란색 수거함입니다." />
+              <textarea
+                name="memo"
+                defaultValue="3번 냉장창고 앞 파란색 수거함입니다."
+              />
             </label>
           </div>
 
@@ -471,8 +1100,16 @@ function DischargerWorkspace({
             >
               임시 저장
             </button>
-            <button type="submit" className="primary-action">
-              {registered ? "등록 완료" : "수거 요청 등록"}
+            <button
+              type="submit"
+              className="primary-action"
+              disabled={saving}
+            >
+              {saving
+                ? "DB 저장 중..."
+                : registered
+                  ? `${registered} 등록 완료`
+                  : "수거 요청 등록"}
             </button>
           </div>
         </form>
@@ -937,8 +1574,12 @@ function FacilityWorkspace({ notify }: { notify: (message: string) => void }) {
 
 function IntegrationsWorkspace({
   notify,
+  supabase,
+  profile,
 }: {
   notify: (message: string) => void;
+  supabase: SupabaseClient;
+  profile: Profile;
 }) {
   return (
     <div className="page-stack">
@@ -978,6 +1619,9 @@ function IntegrationsWorkspace({
           </article>
         ))}
       </section>
+      {profile.role === "admin" && (
+        <AdminInvitePanel supabase={supabase} notify={notify} />
+      )}
       <section className="surface readiness-card">
         <div className="readiness-copy">
           <span className="section-kicker">IMPLEMENTATION READINESS</span>
@@ -1018,12 +1662,145 @@ function IntegrationsWorkspace({
 }
 
 export default function Home() {
+  const supabase = useMemo(() => createClient(), []);
   const [workspace, setWorkspace] = useState<Workspace>("overview");
   const [toast, setToast] = useState("");
-  const current = useMemo(
-    () => navigation.find((item) => item.id === workspace)!,
-    [workspace],
+  const [user, setUser] = useState<User | null>(null);
+  const [profile, setProfile] = useState<Profile | null>(null);
+  const [authLoading, setAuthLoading] = useState(true);
+  const [requests, setRequests] = useState<DbWasteRequest[]>([]);
+
+  const loadProfile = useCallback(
+    async (nextUser: User) => {
+      const fetchProfile = async () =>
+        supabase
+          .from("profiles")
+          .select(
+            "id, organization_id, role, full_name, phone, is_active, organizations(name)",
+          )
+          .eq("id", nextUser.id)
+          .maybeSingle();
+
+      let { data, error } = await fetchProfile();
+
+      if (!data && !error) {
+        const inviteToken =
+          window.localStorage.getItem("bsori-invite-token");
+        const bootstrapRaw =
+          window.localStorage.getItem("bsori-bootstrap");
+
+        if (inviteToken) {
+          const { error: invitationError } = await supabase.rpc(
+            "accept_account_invitation",
+            { p_token: inviteToken },
+          );
+          if (!invitationError) {
+            window.localStorage.removeItem("bsori-invite-token");
+            ({ data, error } = await fetchProfile());
+          }
+        } else if (bootstrapRaw) {
+          const bootstrap = JSON.parse(bootstrapRaw) as {
+            fullName: string;
+            phone: string;
+          };
+          const { error: bootstrapError } = await supabase.rpc(
+            "bootstrap_first_admin",
+            {
+              p_full_name: bootstrap.fullName,
+              p_phone: bootstrap.phone || null,
+            },
+          );
+          if (!bootstrapError) {
+            window.localStorage.removeItem("bsori-bootstrap");
+            ({ data, error } = await fetchProfile());
+          }
+        }
+      }
+
+      if (error) {
+        setProfile(null);
+        setToast(error.message);
+        return;
+      }
+
+      const nextProfile = (data as Profile | null) ?? null;
+      setProfile(nextProfile);
+      if (nextProfile && nextProfile.role !== "admin") {
+        setWorkspace(
+          nextProfile.role === "discharger"
+            ? "discharger"
+            : nextProfile.role === "driver"
+              ? "driver"
+              : "facility",
+        );
+      }
+    },
+    [supabase],
   );
+
+  const loadRequests = useCallback(async () => {
+    const { data, error } = await supabase
+      .from("waste_requests")
+      .select(
+        "id, request_number, waste_type, estimated_weight_kg, status, created_at, organizations(name)",
+      )
+      .order("created_at", { ascending: false })
+      .limit(30);
+
+    if (error) {
+      setToast(error.message);
+      return;
+    }
+
+    setRequests((data ?? []) as DbWasteRequest[]);
+  }, [supabase]);
+
+  useEffect(() => {
+    let mounted = true;
+
+    void supabase.auth.getUser().then(async ({ data }) => {
+      if (!mounted) return;
+      setUser(data.user);
+      if (data.user) await loadProfile(data.user);
+      setAuthLoading(false);
+    });
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (!mounted) return;
+      setUser(session?.user ?? null);
+      if (!session?.user) {
+        setProfile(null);
+        setRequests([]);
+      }
+    });
+
+    return () => {
+      mounted = false;
+      subscription.unsubscribe();
+    };
+  }, [loadProfile, supabase]);
+
+  useEffect(() => {
+    if (!profile) return;
+
+    void loadRequests();
+    const channel = supabase
+      .channel(`waste-requests-${profile.id}`)
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "waste_requests" },
+        () => {
+          void loadRequests();
+        },
+      )
+      .subscribe();
+
+    return () => {
+      void supabase.removeChannel(channel);
+    };
+  }, [loadRequests, profile, supabase]);
 
   useEffect(() => {
     if ("serviceWorker" in navigator) {
@@ -1031,10 +1808,51 @@ export default function Home() {
     }
   }, []);
 
+  const visibleNavigation = useMemo(() => {
+    if (!profile || profile.role === "admin") return navigation;
+    const allowedWorkspace: Record<Exclude<UserRole, "admin">, Workspace> = {
+      discharger: "discharger",
+      driver: "driver",
+      facility: "facility",
+    };
+    return navigation.filter(
+      (item) => item.id === allowedWorkspace[profile.role],
+    );
+  }, [profile]);
+
+  const current = useMemo(
+    () =>
+      visibleNavigation.find((item) => item.id === workspace) ??
+      visibleNavigation[0] ??
+      navigation[0],
+    [visibleNavigation, workspace],
+  );
+
   const notify = (message: string) => {
     setToast(message);
     window.setTimeout(() => setToast(""), 3200);
   };
+
+  if (authLoading) {
+    return (
+      <main className="auth-shell auth-loading">
+        <span className="brand-mark">B</span>
+        <strong>안전한 작업공간을 불러오는 중입니다.</strong>
+      </main>
+    );
+  }
+
+  if (!user || !profile) {
+    return (
+      <AuthPanel
+        supabase={supabase}
+        onReady={async (nextUser) => {
+          setUser(nextUser);
+          await loadProfile(nextUser);
+        }}
+      />
+    );
+  }
 
   return (
     <main className="app-shell">
@@ -1050,12 +1868,12 @@ export default function Home() {
           <span>부산 수산 부산물</span>
           <strong>통합 관리 플랫폼</strong>
           <small>
-            <i /> 데모 시스템 운영 중
+            <i /> Supabase 실시간 연결
           </small>
         </div>
         <nav aria-label="업무 메뉴">
           <span className="nav-label">WORKSPACES</span>
-          {navigation.map((item) => (
+          {visibleNavigation.map((item) => (
             <button
               key={item.id}
               className={workspace === item.id ? "active" : ""}
@@ -1075,12 +1893,14 @@ export default function Home() {
             <span className="pulse-dot" />
             <div>
               <strong>데이터 동기화</strong>
-              <small>실시간 연결 준비</small>
+              <small>Realtime 구독 중</small>
             </div>
           </div>
-          <button onClick={() => setWorkspace("integrations")}>
-            연동 설정
-          </button>
+          {profile.role === "admin" && (
+            <button onClick={() => setWorkspace("integrations")}>
+              계정·연동 설정
+            </button>
+          )}
         </div>
       </aside>
 
@@ -1096,13 +1916,11 @@ export default function Home() {
             <strong>{current.label}</strong>
           </div>
           <div className="top-actions">
-            <span className="demo-chip">DEMO</span>
+            <span className="demo-chip live">LIVE</span>
             <button
               className="top-icon"
               aria-label="검색"
-              onClick={() =>
-                notify("검색 기능은 Supabase 연결 후 활성화됩니다.")
-              }
+              onClick={() => notify(`${requests.length}건의 요청이 검색됩니다.`)}
             >
               ⌕
             </button>
@@ -1114,29 +1932,53 @@ export default function Home() {
               ●<i />
             </button>
             <div className="account">
-              <span>관</span>
+              <span>{profile.full_name.slice(0, 1)}</span>
               <div>
-                <strong>통합 관리자</strong>
-                <small>admin@bsori.kr</small>
+                <strong>{profile.full_name}</strong>
+                <small>
+                  {getOrganizationName(profile.organizations)} ·{" "}
+                  {roleLabel[profile.role]}
+                </small>
               </div>
             </div>
+            <button
+              className="logout-button"
+              onClick={async () => {
+                await supabase.auth.signOut();
+                setUser(null);
+                setProfile(null);
+              }}
+            >
+              로그아웃
+            </button>
           </div>
         </header>
 
         <div className="content">
-          {workspace === "overview" && <AdminOverview notify={notify} />}
+          {workspace === "overview" && (
+            <AdminOverview notify={notify} requests={requests} />
+          )}
           {workspace === "discharger" && (
-            <DischargerWorkspace notify={notify} />
+            <DischargerWorkspace
+              notify={notify}
+              supabase={supabase}
+              profile={profile}
+              onCreated={loadRequests}
+            />
           )}
           {workspace === "driver" && <DriverWorkspace notify={notify} />}
           {workspace === "facility" && <FacilityWorkspace notify={notify} />}
           {workspace === "integrations" && (
-            <IntegrationsWorkspace notify={notify} />
+            <IntegrationsWorkspace
+              notify={notify}
+              supabase={supabase}
+              profile={profile}
+            />
           )}
         </div>
 
         <nav className="mobile-nav" aria-label="모바일 업무 메뉴">
-          {navigation.slice(0, 4).map((item) => (
+          {visibleNavigation.slice(0, 4).map((item) => (
             <button
               key={item.id}
               className={workspace === item.id ? "active" : ""}
