@@ -1,7 +1,7 @@
 # B.SORI 운영 연동 안내
 
 Supabase 로그인, 관리자 초대, 역할별 권한, 부산물 등록, 사진 업로드,
-실시간 요청 목록 갱신이 연결되어 있습니다.
+실시간 요청 목록 갱신과 Gemini 사진 분석이 연결되어 있습니다.
 
 ## 최초 관리자 생성
 
@@ -36,6 +36,8 @@ Supabase 로그인, 관리자 초대, 역할별 권한, 부산물 등록, 사진
 - 부산물 사진은 비공개 Storage 버킷 `waste-photos`에 저장됩니다.
 - 관리자는 DB의 실제 수거 요청 목록을 확인할 수 있습니다.
 - 요청 변경은 Supabase Realtime으로 화면에 반영됩니다.
+- 로그인한 배출업체가 사진을 분석하면 서버가 Gemini 3.6 Flash를
+  호출하고, 검토한 분석 결과가 요청의 `ai_result`에 함께 저장됩니다.
 - 사용자와 조직 접근은 RLS 정책으로 제한됩니다.
 
 ## 적용한 SQL
@@ -48,11 +50,15 @@ Supabase 로그인, 관리자 초대, 역할별 권한, 부산물 등록, 사진
 두 번째 SQL은 예시 업체, 관리자 초대 RPC, 최초 관리자 생성 RPC,
 Storage 접근 정책을 추가합니다.
 
+## 외부 API 설정
+
+Gemini 키는 배포 환경의 서버 전용 `GEMINI_API_KEY`에 저장합니다.
+키를 브라우저 코드나 Git 저장소에 넣으면 안 됩니다.
+
 ## 아직 별도 키가 필요한 기능
 
 다음 기능은 현재 화면 시연용이며, 실제 연동 시 Secret을 추가해야 합니다.
 
-- Gemini 분석: `GEMINI_API_KEY`
 - Kakao 지도: `KAKAO_JAVASCRIPT_KEY`
 - Kakao 주소 검색: `KAKAO_REST_API_KEY`
 - Kakao Mobility 경로: `KAKAO_MOBILITY_REST_API_KEY`

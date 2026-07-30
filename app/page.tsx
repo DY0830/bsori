@@ -46,6 +46,18 @@ type Organization = {
   organization_type: UserRole;
 };
 
+type WasteAnalysis = {
+  wasteType: string;
+  condition: string;
+  foreignMaterial: string;
+  estimatedWeightKgMin: number;
+  estimatedWeightKgMax: number;
+  recommendedPickupHours: number;
+  confidence: number;
+  summary: string;
+  warnings: string[];
+};
+
 const navigation: {
   id: Workspace;
   label: string;
@@ -899,6 +911,8 @@ function DischargerWorkspace({
   const [photoName, setPhotoName] = useState("");
   const [photo, setPhoto] = useState<File | null>(null);
   const [analyzed, setAnalyzed] = useState(false);
+  const [analysis, setAnalysis] = useState<WasteAnalysis | null>(null);
+  const [analyzing, setAnalyzing] = useState(false);
   const [registered, setRegistered] = useState("");
   const [saving, setSaving] = useState(false);
 
@@ -913,6 +927,66 @@ function DischargerWorkspace({
       setPhoto(file);
       setPhotoName(file.name);
       setAnalyzed(false);
+      setAnalysis(null);
+    }
+  };
+
+  const analyzePhoto = async () => {
+    if (!photo) return;
+
+    setAnalyzing(true);
+    setAnalyzed(false);
+
+    try {
+      const imageBase64 = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => {
+          const result = String(reader.result ?? "");
+          resolve(result.slice(result.indexOf(",") + 1));
+        };
+        reader.onerror = () => reject(new Error("사진을 읽지 못했습니다."));
+        reader.readAsDataURL(photo);
+      });
+
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+      if (!session?.access_token) {
+        throw new Error("로그인 세션을 확인하지 못했습니다.");
+      }
+
+      const response = await fetch("/api/analyze-waste", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${session.access_token}`,
+        },
+        body: JSON.stringify({
+          imageBase64,
+          mimeType: photo.type || "image/jpeg",
+        }),
+      });
+      const payload = (await response.json()) as {
+        analysis?: WasteAnalysis;
+        error?: string;
+      };
+
+      if (!response.ok || !payload.analysis) {
+        throw new Error(payload.error ?? "AI 분석에 실패했습니다.");
+      }
+
+      setAnalysis(payload.analysis);
+      setAnalyzed(true);
+      notify("Gemini 사진 분석이 완료되었습니다.");
+    } catch (caught) {
+      setAnalysis(null);
+      notify(
+        caught instanceof Error
+          ? caught.message
+          : "사진 분석 중 오류가 발생했습니다.",
+      );
+    } finally {
+      setAnalyzing(false);
     }
   };
 
@@ -960,6 +1034,8 @@ function DischargerWorkspace({
           pickup_address: String(form.get("pickupAddress") ?? ""),
           memo: String(form.get("memo") ?? ""),
           photo_path: photoPath,
+          ai_result: analysis,
+          ai_verified: false,
           status: "requested",
         });
 
@@ -1137,39 +1213,46 @@ function DischargerWorkspace({
                     ? "사진이 준비되었습니다. 분석을 시작해 주세요."
                     : "사진을 등록하면 부산물 종류와 상태를 자동으로 추정합니다."}
                 </p>
-                <button disabled={!photoName} onClick={() => setAnalyzed(true)}>
-                  사진 분석 시작
+                <button
+                  disabled={!photoName || analyzing}
+                  onClick={analyzePhoto}
+                >
+                  {analyzing ? "Gemini 분석 중..." : "사진 분석 시작"}
                 </button>
               </div>
-            ) : (
+            ) : analysis ? (
               <div className="analysis-result">
                 <span className="confidence-label">
-                  분석 신뢰도 <b>94.6%</b>
+                  분석 신뢰도 <b>{analysis.confidence.toFixed(1)}%</b>
                 </span>
-                <h3>고등어 내장 부산물</h3>
+                <h3>{analysis.wasteType}</h3>
                 <div className="analysis-grid">
                   <span>
-                    추정 상태 <b>양호</b>
+                    추정 상태 <b>{analysis.condition}</b>
                   </span>
                   <span>
-                    이물질 <b>미검출</b>
+                    이물질 <b>{analysis.foreignMaterial}</b>
                   </span>
                   <span>
-                    추정 중량 <b>405~435kg</b>
+                    추정 중량{" "}
+                    <b>
+                      {analysis.estimatedWeightKgMin}~
+                      {analysis.estimatedWeightKgMax}kg
+                    </b>
                   </span>
                   <span>
-                    권장 수거 <b>4시간 이내</b>
+                    권장 수거 <b>{analysis.recommendedPickupHours}시간 이내</b>
                   </span>
                 </div>
                 <div className="analysis-note">
                   <b>검증 필요</b>
-                  <p>
-                    AI 결과는 참고값입니다. 등록 전 담당자가 내용을 확인해
-                    주세요.
-                  </p>
+                  <p>{analysis.summary}</p>
+                  {analysis.warnings.length > 0 && (
+                    <small>{analysis.warnings.join(" · ")}</small>
+                  )}
                 </div>
               </div>
-            )}
+            ) : null}
           </article>
           <article className="surface recent-card">
             <div className="surface-heading">
