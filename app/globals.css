@@ -719,6 +719,34 @@ button {
   font-size: 8px;
   line-height: 1.5;
 }
+.weather-source {
+  margin-top: 10px;
+  padding: 0;
+  border: 0;
+  color: #74857c;
+  background: transparent;
+  font-size: 8px;
+  font-weight: 800;
+  cursor: pointer;
+}
+.risk-line.risk-low i {
+  background: #2fb474;
+}
+.risk-line.risk-low strong {
+  color: #17704b;
+}
+.risk-line.risk-medium i {
+  background: #e3a33d;
+}
+.risk-line.risk-medium strong {
+  color: #9a671e;
+}
+.risk-line.risk-high i {
+  background: #e05757;
+}
+.risk-line.risk-high strong {
+  color: #a53a3a;
+}
 .request-table-card {
   grid-column: 1/-1;
   overflow: auto;

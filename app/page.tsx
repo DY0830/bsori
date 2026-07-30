@@ -59,6 +59,21 @@ type WasteAnalysis = {
   warnings: string[];
 };
 
+type WeatherForecast = {
+  location: string;
+  temperatureC: number;
+  precipitationProbability: number;
+  weather: string;
+  symbol: string;
+  windDirection: string;
+  riskLevel: string;
+  riskTone: "low" | "medium" | "high";
+  riskReason: string;
+  forecastAt: string;
+  issuedAt: string;
+  source: string;
+};
+
 type Coordinate = {
   longitude: number;
   latitude: number;
@@ -228,8 +243,8 @@ const integrations = [
   },
   {
     name: "기상청 단기예보",
-    detail: "강수 · 강풍 · 수거 위험 판단",
-    status: "서비스 키 필요",
+    detail: "강수 · 고온 · 수거 위험 판단",
+    status: "연결 완료",
     group: "날씨",
     tone: "blue",
     mark: "W",
@@ -750,9 +765,13 @@ function MiniMetric({
 function AdminOverview({
   notify,
   requests,
+  weather,
+  weatherLoading,
 }: {
   notify: (message: string) => void;
   requests: DbWasteRequest[];
+  weather: WeatherForecast | null;
+  weatherLoading: boolean;
 }) {
   return (
     <div className="page-stack">
@@ -863,24 +882,54 @@ function AdminOverview({
               <span className="section-kicker">FIELD SAFETY</span>
               <h2>부산 수거 기상</h2>
             </div>
-            <span className="weather-place">영도구</span>
+            <span className="weather-place">
+              {weather?.location ?? "부산"}
+            </span>
           </div>
           <div className="weather-main">
-            <span className="weather-symbol">☁</span>
-            <strong>24°</strong>
+            <span className="weather-symbol">{weather?.symbol ?? "…"}</span>
+            <strong>
+              {weatherLoading
+                ? "--°"
+                : weather
+                  ? `${Math.round(weather.temperatureC)}°`
+                  : "오류"}
+            </strong>
             <div>
-              <b>흐림</b>
-              <small>체감 25° · 강수 30%</small>
+              <b>
+                {weatherLoading
+                  ? "예보 확인 중"
+                  : weather?.weather ?? "조회 실패"}
+              </b>
+              <small>
+                {weather
+                  ? `강수 ${weather.precipitationProbability}% · ${weather.windDirection}`
+                  : "잠시 후 다시 확인해 주세요."}
+              </small>
             </div>
           </div>
-          <div className="risk-line">
+          <div className={`risk-line risk-${weather?.riskTone ?? "medium"}`}>
             <span>
               <i />
               수거 위험도
             </span>
-            <strong>보통</strong>
+            <strong>{weather?.riskLevel ?? "확인 중"}</strong>
           </div>
-          <p>15시 이후 해안가 순간 풍속이 높아질 수 있습니다.</p>
+          <p>{weather?.riskReason ?? "기상청 단기예보를 불러오고 있습니다."}</p>
+          {weather && (
+            <button
+              className="weather-source"
+              onClick={() => notify(`${weather.source} 기준 예보입니다.`)}
+            >
+              {new Intl.DateTimeFormat("ko-KR", {
+                timeZone: "Asia/Seoul",
+                month: "numeric",
+                day: "numeric",
+                hour: "numeric",
+              }).format(new Date(weather.forecastAt))}{" "}
+              예보
+            </button>
+          )}
         </article>
 
         <article className="surface request-table-card">
@@ -1645,9 +1694,13 @@ function KakaoRouteMap({ supabase }: { supabase: SupabaseClient }) {
 function DriverWorkspace({
   notify,
   supabase,
+  weather,
+  weatherLoading,
 }: {
   notify: (message: string) => void;
   supabase: SupabaseClient;
+  weather: WeatherForecast | null;
+  weatherLoading: boolean;
 }) {
   const [tasks, setTasks] = useState<
     {
@@ -1716,10 +1769,20 @@ function DriverWorkspace({
           <p>오늘 3개 지점 · 총 예상 수거량 2.2톤</p>
         </div>
         <div className="driver-weather">
-          <span>☁</span>
+          <span>{weather?.symbol ?? "…"}</span>
           <div>
-            <strong>24° · 흐림</strong>
-            <small>강풍 주의 · 위험도 보통</small>
+            <strong>
+              {weatherLoading
+                ? "부산 예보 확인 중"
+                : weather
+                  ? `${Math.round(weather.temperatureC)}° · ${weather.weather}`
+                  : "기상 정보 조회 실패"}
+            </strong>
+            <small>
+              {weather
+                ? `강수 ${weather.precipitationProbability}% · 위험도 ${weather.riskLevel}`
+                : "연결 상태를 확인해 주세요."}
+            </small>
           </div>
         </div>
       </section>
@@ -2094,6 +2157,8 @@ export default function Home() {
   const [profile, setProfile] = useState<Profile | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [requests, setRequests] = useState<DbWasteRequest[]>([]);
+  const [weather, setWeather] = useState<WeatherForecast | null>(null);
+  const [weatherLoading, setWeatherLoading] = useState(false);
 
   const loadProfile = useCallback(
     async (nextUser: User) => {
@@ -2179,6 +2244,49 @@ export default function Home() {
 
     setRequests((data ?? []) as DbWasteRequest[]);
   }, [supabase]);
+
+  const loadWeather = useCallback(async () => {
+    if (!profile || !["admin", "driver"].includes(profile.role)) {
+      setWeather(null);
+      return;
+    }
+
+    setWeatherLoading(true);
+    try {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+      if (!session) return;
+
+      const response = await fetch("/api/weather", {
+        cache: "no-store",
+        headers: { Authorization: `Bearer ${session.access_token}` },
+      });
+      const payload = (await response.json()) as WeatherForecast & {
+        error?: string;
+      };
+      if (!response.ok) throw new Error(payload.error ?? "기상 조회 실패");
+      setWeather(payload);
+    } catch (caught) {
+      setWeather(null);
+      setToast(
+        caught instanceof Error
+          ? caught.message
+          : "기상청 예보를 불러오지 못했습니다.",
+      );
+    } finally {
+      setWeatherLoading(false);
+    }
+  }, [profile, supabase]);
+
+  useEffect(() => {
+    void loadWeather();
+    const interval = window.setInterval(
+      () => void loadWeather(),
+      30 * 60 * 1000,
+    );
+    return () => window.clearInterval(interval);
+  }, [loadWeather]);
 
   useEffect(() => {
     let mounted = true;
@@ -2387,7 +2495,12 @@ export default function Home() {
 
         <div className="content">
           {workspace === "overview" && (
-            <AdminOverview notify={notify} requests={requests} />
+            <AdminOverview
+              notify={notify}
+              requests={requests}
+              weather={weather}
+              weatherLoading={weatherLoading}
+            />
           )}
           {workspace === "discharger" && (
             <DischargerWorkspace
@@ -2398,7 +2511,12 @@ export default function Home() {
             />
           )}
           {workspace === "driver" && (
-            <DriverWorkspace notify={notify} supabase={supabase} />
+            <DriverWorkspace
+              notify={notify}
+              supabase={supabase}
+              weather={weather}
+              weatherLoading={weatherLoading}
+            />
           )}
           {workspace === "facility" && <FacilityWorkspace notify={notify} />}
           {workspace === "integrations" && (
