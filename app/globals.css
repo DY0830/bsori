@@ -979,6 +979,10 @@ button.request-row {
   font-weight: 900;
   cursor: pointer;
 }
+.address-input button:disabled {
+  cursor: wait;
+  opacity: 0.58;
+}
 .upload-zone {
   margin-top: 16px;
 }
@@ -1310,6 +1314,50 @@ button.request-row {
   overflow: hidden;
   border-radius: 13px;
   background: linear-gradient(135deg, #e9f1ec 0 68%, #d9ecee 68%);
+}
+.kakao-route-map {
+  background:
+    radial-gradient(circle at 18% 24%, rgba(22, 132, 90, 0.12), transparent 28%),
+    linear-gradient(135deg, #e9f1ec 0 68%, #d9ecee 68%);
+}
+.map-api-state {
+  position: absolute;
+  z-index: 5;
+  inset: 50% auto auto 50%;
+  width: min(310px, calc(100% - 32px));
+  padding: 20px;
+  transform: translate(-50%, -50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  border: 1px solid rgba(164, 190, 176, 0.75);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.92);
+  backdrop-filter: blur(10px);
+  box-shadow: 0 12px 34px rgba(25, 72, 51, 0.12);
+}
+.map-api-state > span {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  color: #fff;
+  background: #16845a;
+  border-radius: 10px;
+  font-size: 12px;
+  font-weight: 950;
+}
+.map-api-state strong {
+  margin-top: 10px;
+  font-size: 11px;
+}
+.map-api-state small {
+  max-width: 250px;
+  margin-top: 5px;
+  color: #738078;
+  font-size: 8px;
+  line-height: 1.55;
 }
 .route-map::before {
   content: "";

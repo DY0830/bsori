@@ -55,13 +55,21 @@ Storage 접근 정책을 추가합니다.
 Gemini 키는 배포 환경의 서버 전용 `GEMINI_API_KEY`에 저장합니다.
 키를 브라우저 코드나 Git 저장소에 넣으면 안 됩니다.
 
+## Kakao 지도와 길찾기
+
+- `NEXT_PUBLIC_KAKAO_JAVASCRIPT_KEY`: 브라우저 지도 표시
+- `KAKAO_REST_API_KEY`: 서버 주소 검색과 Kakao Mobility 길찾기
+
+운영 사이트와 localhost는 각각 해당 도메인이 등록된 JavaScript 키를
+사용합니다. REST 키는 서버 Secret으로만 저장합니다.
+
+카카오디벨로퍼스 앱의 `카카오맵 → 사용 설정` 상태가 `ON`이어야 실제
+주소 검색과 지도 API가 작동합니다.
+
 ## 아직 별도 키가 필요한 기능
 
 다음 기능은 현재 화면 시연용이며, 실제 연동 시 Secret을 추가해야 합니다.
 
-- Kakao 지도: `KAKAO_JAVASCRIPT_KEY`
-- Kakao 주소 검색: `KAKAO_REST_API_KEY`
-- Kakao Mobility 경로: `KAKAO_MOBILITY_REST_API_KEY`
 - 기상청 단기예보: `KMA_SERVICE_KEY`
 - 이메일 알림: `RESEND_API_KEY`, `RESEND_FROM_EMAIL`
 

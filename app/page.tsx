@@ -6,6 +6,7 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from "react";
 import type { SupabaseClient, User } from "@supabase/supabase-js";
@@ -57,6 +58,101 @@ type WasteAnalysis = {
   summary: string;
   warnings: string[];
 };
+
+type Coordinate = {
+  longitude: number;
+  latitude: number;
+};
+
+type KakaoMapsApi = {
+  load: (callback: () => void) => void;
+  Map: new (
+    container: HTMLElement,
+    options: { center: KakaoLatLng; level: number },
+  ) => KakaoMap;
+  LatLng: new (latitude: number, longitude: number) => KakaoLatLng;
+  LatLngBounds: new () => {
+    extend: (point: KakaoLatLng) => void;
+  };
+  Marker: new (options: {
+    map: KakaoMap;
+    position: KakaoLatLng;
+    title?: string;
+  }) => unknown;
+  Polyline: new (options: {
+    map: KakaoMap;
+    path: KakaoLatLng[];
+    strokeWeight: number;
+    strokeColor: string;
+    strokeOpacity: number;
+    strokeStyle: string;
+  }) => unknown;
+};
+
+type KakaoLatLng = object;
+type KakaoMap = {
+  setBounds: (bounds: object, padding?: number) => void;
+};
+
+declare global {
+  interface Window {
+    kakao?: { maps: KakaoMapsApi };
+  }
+}
+
+let kakaoMapsLoader: Promise<KakaoMapsApi> | null = null;
+
+function loadKakaoMaps() {
+  if (kakaoMapsLoader) return kakaoMapsLoader;
+
+  kakaoMapsLoader = new Promise<KakaoMapsApi>((resolve, reject) => {
+    const apiKey = process.env.NEXT_PUBLIC_KAKAO_JAVASCRIPT_KEY;
+    if (!apiKey) {
+      reject(new Error("카카오 JavaScript 키가 설정되지 않았습니다."));
+      return;
+    }
+
+    const finish = () => {
+      if (!window.kakao?.maps) {
+        reject(new Error("카카오 지도 SDK를 불러오지 못했습니다."));
+        return;
+      }
+      window.kakao.maps.load(() => resolve(window.kakao!.maps));
+    };
+
+    if (window.kakao?.maps) {
+      finish();
+      return;
+    }
+
+    const existing = document.querySelector<HTMLScriptElement>(
+      'script[data-bsori-kakao-map="true"]',
+    );
+    if (existing) {
+      existing.addEventListener("load", finish, { once: true });
+      existing.addEventListener(
+        "error",
+        () => reject(new Error("카카오 지도 SDK 연결에 실패했습니다.")),
+        { once: true },
+      );
+      return;
+    }
+
+    const script = document.createElement("script");
+    script.dataset.bsoriKakaoMap = "true";
+    script.async = true;
+    script.src = `https://dapi.kakao.com/v2/maps/sdk.js?appkey=${apiKey}&autoload=false`;
+    script.addEventListener("load", finish, { once: true });
+    script.addEventListener(
+      "error",
+      () => reject(new Error("카카오 지도 SDK 연결에 실패했습니다.")),
+      { once: true },
+    );
+    document.head.appendChild(script);
+  });
+
+  return kakaoMapsLoader;
+}
 
 const navigation: {
   id: Workspace;
@@ -127,6 +223,9 @@ const supabaseConfigured = Boolean(
   process.env.NEXT_PUBLIC_SUPABASE_URL &&
     process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY,
 );
+const kakaoMapsConfigured = Boolean(
+  process.env.NEXT_PUBLIC_KAKAO_JAVASCRIPT_KEY,
+);
 
 const integrations = [
   {
@@ -140,7 +239,7 @@ const integrations = [
   {
     name: "Gemini API",
     detail: "사진 판별 · 문서 정보 추출",
-    status: "API 키 필요",
+    status: "연결 완료",
     group: "AI 분석",
     tone: "violet",
     mark: "G",
@@ -148,7 +247,7 @@ const integrations = [
   {
     name: "Kakao Maps",
     detail: "지도 · 주소 좌표 변환",
-    status: "API 키 필요",
+    status: kakaoMapsConfigured ? "키 연결 완료" : "설정 필요",
     group: "지도",
     tone: "yellow",
     mark: "K",
@@ -156,7 +255,7 @@ const integrations = [
   {
     name: "Kakao Mobility",
     detail: "경로 · 거리 · 예상 시간",
-    status: "API 키 필요",
+    status: "서버 연결 완료",
     group: "경로",
     tone: "yellow",
     mark: "M",
@@ -913,6 +1012,12 @@ function DischargerWorkspace({
   const [analyzed, setAnalyzed] = useState(false);
   const [analysis, setAnalysis] = useState<WasteAnalysis | null>(null);
   const [analyzing, setAnalyzing] = useState(false);
+  const [pickupAddress, setPickupAddress] = useState(
+    "부산광역시 영도구 해양로 24",
+  );
+  const [pickupCoordinate, setPickupCoordinate] =
+    useState<Coordinate | null>(null);
+  const [addressSearching, setAddressSearching] = useState(false);
   const [registered, setRegistered] = useState("");
   const [saving, setSaving] = useState(false);
 
@@ -990,6 +1095,59 @@ function DischargerWorkspace({
     }
   };
 
+  const searchAddress = async () => {
+    if (!pickupAddress.trim()) {
+      notify("검색할 주소를 입력해 주세요.");
+      return;
+    }
+
+    setAddressSearching(true);
+    try {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+      if (!session?.access_token) {
+        throw new Error("로그인 세션을 확인하지 못했습니다.");
+      }
+
+      const response = await fetch(
+        `/api/kakao/geocode?query=${encodeURIComponent(pickupAddress)}`,
+        {
+          headers: {
+            Authorization: `Bearer ${session.access_token}`,
+          },
+        },
+      );
+      const payload = (await response.json()) as {
+        result?: {
+          address: string;
+          longitude: number;
+          latitude: number;
+        };
+        error?: string;
+      };
+
+      if (!response.ok || !payload.result) {
+        throw new Error(payload.error ?? "주소 검색에 실패했습니다.");
+      }
+
+      setPickupAddress(payload.result.address);
+      setPickupCoordinate({
+        longitude: payload.result.longitude,
+        latitude: payload.result.latitude,
+      });
+      notify("카카오 주소 검색으로 위치를 확인했습니다.");
+    } catch (caught) {
+      notify(
+        caught instanceof Error
+          ? caught.message
+          : "주소 검색 중 오류가 발생했습니다.",
+      );
+    } finally {
+      setAddressSearching(false);
+    }
+  };
+
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     setSaving(true);
@@ -1032,6 +1190,8 @@ function DischargerWorkspace({
           preferred_pickup_at:
             String(form.get("preferredPickupAt") ?? "") || null,
           pickup_address: String(form.get("pickupAddress") ?? ""),
+          latitude: pickupCoordinate?.latitude ?? null,
+          longitude: pickupCoordinate?.longitude ?? null,
           memo: String(form.get("memo") ?? ""),
           photo_path: photoPath,
           ai_result: analysis,
@@ -1128,16 +1288,19 @@ function DischargerWorkspace({
               <div className="address-input">
                 <input
                   name="pickupAddress"
-                  defaultValue="부산광역시 영도구 해양로 24"
+                  value={pickupAddress}
+                  onChange={(event) => {
+                    setPickupAddress(event.target.value);
+                    setPickupCoordinate(null);
+                  }}
                   required
                 />
                 <button
                   type="button"
-                  onClick={() =>
-                    notify("Kakao Local API 연결 후 주소 검색이 활성화됩니다.")
-                  }
+                  disabled={addressSearching}
+                  onClick={searchAddress}
                 >
-                  주소 검색
+                  {addressSearching ? "검색 중..." : "주소 검색"}
                 </button>
               </div>
             </label>
@@ -1281,7 +1444,182 @@ function DischargerWorkspace({
   );
 }
 
-function DriverWorkspace({ notify }: { notify: (message: string) => void }) {
+const routeStops = [
+  {
+    name: "부산공동어시장",
+    longitude: 129.0276,
+    latitude: 35.0976,
+  },
+  {
+    name: "남항수산가공",
+    longitude: 129.0365,
+    latitude: 35.0846,
+  },
+  {
+    name: "해원수산",
+    longitude: 129.0708,
+    latitude: 35.0884,
+  },
+];
+
+const resourceFacility = {
+  name: "B.SORI 자원화센터",
+  longitude: 129.0445,
+  latitude: 35.0878,
+};
+
+function KakaoRouteMap({ supabase }: { supabase: SupabaseClient }) {
+  const mapContainer = useRef<HTMLDivElement>(null);
+  const [route, setRoute] = useState<{
+    distanceMeters: number;
+    durationSeconds: number;
+    path: Coordinate[];
+  } | null>(null);
+  const [mapError, setMapError] = useState("");
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const initialize = async () => {
+      try {
+        const {
+          data: { session },
+        } = await supabase.auth.getSession();
+        if (!session?.access_token) {
+          throw new Error("로그인 세션을 확인하지 못했습니다.");
+        }
+
+        const response = await fetch("/api/kakao/directions", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${session.access_token}`,
+          },
+          body: JSON.stringify({
+            origin: resourceFacility,
+            destination: resourceFacility,
+            waypoints: routeStops,
+          }),
+        });
+        const payload = (await response.json()) as {
+          route?: {
+            distanceMeters: number;
+            durationSeconds: number;
+            path: Coordinate[];
+          };
+          error?: string;
+        };
+        if (!response.ok || !payload.route) {
+          throw new Error(payload.error ?? "수거 경로를 계산하지 못했습니다.");
+        }
+
+        const maps = await loadKakaoMaps();
+        if (cancelled || !mapContainer.current) return;
+
+        const center = new maps.LatLng(
+          resourceFacility.latitude,
+          resourceFacility.longitude,
+        );
+        const map = new maps.Map(mapContainer.current, {
+          center,
+          level: 7,
+        });
+        const bounds = new maps.LatLngBounds();
+
+        [resourceFacility, ...routeStops].forEach((stop) => {
+          const position = new maps.LatLng(stop.latitude, stop.longitude);
+          bounds.extend(position);
+          new maps.Marker({
+            map,
+            position,
+            title: stop.name,
+          });
+        });
+
+        if (payload.route.path.length > 0) {
+          new maps.Polyline({
+            map,
+            path: payload.route.path.map(
+              (point) => new maps.LatLng(point.latitude, point.longitude),
+            ),
+            strokeWeight: 5,
+            strokeColor: "#16845a",
+            strokeOpacity: 0.9,
+            strokeStyle: "solid",
+          });
+        }
+
+        map.setBounds(bounds, 44);
+        setRoute(payload.route);
+        setMapError("");
+      } catch (caught) {
+        if (cancelled) return;
+        setMapError(
+          caught instanceof Error
+            ? caught.message
+            : "카카오 지도를 불러오지 못했습니다.",
+        );
+      }
+    };
+
+    initialize();
+    return () => {
+      cancelled = true;
+    };
+  }, [supabase]);
+
+  const durationMinutes = route
+    ? Math.max(1, Math.round(route.durationSeconds / 60))
+    : null;
+
+  return (
+    <>
+      <div className="route-map kakao-route-map" ref={mapContainer}>
+        {!route && (
+          <div className="map-api-state">
+            <span>{mapError ? "!" : "K"}</span>
+            <strong>
+              {mapError ? "카카오맵 사용 설정 필요" : "수거 경로 계산 중"}
+            </strong>
+            <small>
+              {mapError ||
+                "부산 수거지 3곳의 실제 이동 경로를 불러오고 있습니다."}
+            </small>
+          </div>
+        )}
+      </div>
+      <div className="route-summary">
+        <span>
+          총 거리{" "}
+          <b>
+            {route
+              ? `${(route.distanceMeters / 1000).toFixed(1)}km`
+              : "확인 중"}
+          </b>
+        </span>
+        <span>
+          예상 시간{" "}
+          <b>
+            {durationMinutes
+              ? `${Math.floor(durationMinutes / 60)}시간 ${durationMinutes % 60}분`
+              : "확인 중"}
+          </b>
+        </span>
+        <span>
+          방문 지점 <b>{routeStops.length}곳</b>
+        </span>
+      </div>
+    </>
+  );
+}
+
+function DriverWorkspace({
+  notify,
+  supabase,
+}: {
+  notify: (message: string) => void;
+  supabase: SupabaseClient;
+}) {
   const [tasks, setTasks] = useState<
     {
       id: string;
@@ -1366,32 +1704,7 @@ function DriverWorkspace({ notify }: { notify: (message: string) => void }) {
             </div>
             <span className="route-saving">18분 단축</span>
           </div>
-          <div className="route-map">
-            <span className="map-water-label">BUSAN HARBOR</span>
-            <i className="map-road road-a" />
-            <i className="map-road road-b" />
-            <i className="map-road road-c" />
-            <i className="map-route route-a" />
-            <i className="map-route route-b" />
-            <i className="map-route route-c" />
-            <span className="map-location start">출</span>
-            <span className="map-location point-one">1</span>
-            <span className="map-location point-two">2</span>
-            <span className="map-location point-three">3</span>
-            <span className="map-location finish">B</span>
-            <div className="map-vehicle">2호차</div>
-          </div>
-          <div className="route-summary">
-            <span>
-              총 거리 <b>31.8km</b>
-            </span>
-            <span>
-              예상 시간 <b>2시간 35분</b>
-            </span>
-            <span>
-              적재율 <b>42%</b>
-            </span>
-          </div>
+          <KakaoRouteMap supabase={supabase} />
         </article>
 
         <article className="task-stack">
@@ -2052,7 +2365,9 @@ export default function Home() {
               onCreated={loadRequests}
             />
           )}
-          {workspace === "driver" && <DriverWorkspace notify={notify} />}
+          {workspace === "driver" && (
+            <DriverWorkspace notify={notify} supabase={supabase} />
+          )}
           {workspace === "facility" && <FacilityWorkspace notify={notify} />}
           {workspace === "integrations" && (
             <IntegrationsWorkspace
