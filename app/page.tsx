@@ -39,6 +39,9 @@ type DbWasteRequest = {
   request_number: string;
   waste_type: string;
   estimated_weight_kg: number;
+  pickup_address: string;
+  latitude: number | null;
+  longitude: number | null;
   status: string;
   created_at: string;
   organizations: { name: string } | { name: string }[] | null;
@@ -1410,6 +1413,27 @@ function AdminOperationsWorkspace({
       request.status,
     ),
   ).length;
+  const mapStops = useMemo(
+    () =>
+      requests.flatMap((request) => {
+        if (
+          request.latitude === null ||
+          request.longitude === null ||
+          ["processed", "completed"].includes(request.status)
+        ) {
+          return [];
+        }
+
+        return [
+          {
+            name: getOrganizationName(request.organizations),
+            latitude: Number(request.latitude),
+            longitude: Number(request.longitude),
+          },
+        ];
+      }),
+    [requests],
+  );
 
   return (
     <div className="page-stack">
@@ -1449,6 +1473,24 @@ function AdminOperationsWorkspace({
         notify={notify}
         onChanged={onChanged}
       />
+
+      <article className="surface route-map-card">
+        <div className="surface-heading">
+          <div>
+            <span className="section-kicker">BUSAN COLLECTION MAP</span>
+            <h2>수거 경로 지도</h2>
+            <p>
+              대기 중인 수거지를 방문 순서대로 연결하고 거리와 예상 시간을
+              계산합니다.
+            </p>
+          </div>
+          <span className="route-saving">Kakao 경로 연동</span>
+        </div>
+        <KakaoRouteMap
+          supabase={supabase}
+          stops={mapStops.length > 0 ? mapStops : routeStops}
+        />
+      </article>
 
       <article className="surface compact-request-card">
         <div className="surface-heading">
@@ -3734,7 +3776,7 @@ export default function Home() {
     const { data, error } = await supabase
       .from("waste_requests")
       .select(
-        "id, request_number, waste_type, estimated_weight_kg, status, created_at, organizations(name)",
+        "id, request_number, waste_type, estimated_weight_kg, pickup_address, latitude, longitude, status, created_at, organizations(name)",
       )
       .order("created_at", { ascending: false })
       .limit(30);
