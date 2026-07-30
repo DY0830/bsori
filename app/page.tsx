@@ -41,6 +41,128 @@ type DbWasteRequest = {
   organizations: { name: string } | { name: string }[] | null;
 };
 
+type DispatchDriver = {
+  id: string;
+  full_name: string;
+  organizations: { name: string } | { name: string }[] | null;
+};
+
+type DispatchVehicle = {
+  id: string;
+  driver_id: string;
+  plate_number: string;
+  capacity_kg: number;
+};
+
+type DriverAssignment = {
+  id: string;
+  route_order: number | null;
+  assigned_at: string;
+  started_at: string | null;
+  arrived_at: string | null;
+  collected_at: string | null;
+  actual_weight_kg: number | null;
+  vehicles:
+    | { plate_number: string }
+    | { plate_number: string }[]
+    | null;
+  waste_requests:
+    | {
+        id: string;
+        request_number: string;
+        waste_type: string;
+        estimated_weight_kg: number;
+        pickup_address: string;
+        latitude: number | null;
+        longitude: number | null;
+        status: string;
+        organizations: { name: string } | { name: string }[] | null;
+      }
+    | {
+        id: string;
+        request_number: string;
+        waste_type: string;
+        estimated_weight_kg: number;
+        pickup_address: string;
+        latitude: number | null;
+        longitude: number | null;
+        status: string;
+        organizations: { name: string } | { name: string }[] | null;
+      }[]
+    | null;
+};
+
+type FacilityWorkItem = {
+  id: string;
+  request_number: string;
+  waste_type: string;
+  estimated_weight_kg: number;
+  status: string;
+  organizations: { name: string } | { name: string }[] | null;
+  collection_assignments:
+    | {
+        actual_weight_kg: number | null;
+        collected_at: string | null;
+        vehicles:
+          | { plate_number: string }
+          | { plate_number: string }[]
+          | null;
+      }
+    | {
+        actual_weight_kg: number | null;
+        collected_at: string | null;
+        vehicles:
+          | { plate_number: string }
+          | { plate_number: string }[]
+          | null;
+      }[]
+    | null;
+  facility_receipts:
+    | {
+        id: string;
+        measured_weight_kg: number;
+        received_at: string;
+        processing_results:
+          | {
+              id: string;
+              processing_method: string;
+              processing_line: string | null;
+              input_weight_kg: number;
+              output_weight_kg: number | null;
+            }
+          | {
+              id: string;
+              processing_method: string;
+              processing_line: string | null;
+              input_weight_kg: number;
+              output_weight_kg: number | null;
+            }[]
+          | null;
+      }
+    | {
+        id: string;
+        measured_weight_kg: number;
+        received_at: string;
+        processing_results:
+          | {
+              id: string;
+              processing_method: string;
+              processing_line: string | null;
+              input_weight_kg: number;
+              output_weight_kg: number | null;
+            }
+          | {
+              id: string;
+              processing_method: string;
+              processing_line: string | null;
+              input_weight_kg: number;
+              output_weight_kg: number | null;
+            }[]
+          | null;
+      }[]
+    | null;
+};
+
 type Organization = {
   id: string;
   name: string;
@@ -285,6 +407,10 @@ function getOrganizationName(
     return organization[0]?.name ?? "소속 미지정";
   }
   return organization?.name ?? "소속 미지정";
+}
+
+function firstRelation<T>(value: T | T[] | null | undefined) {
+  return Array.isArray(value) ? (value[0] ?? null) : (value ?? null);
 }
 
 function AuthPanel({
@@ -762,16 +888,228 @@ function MiniMetric({
   );
 }
 
+function AdminDispatchPanel({
+  supabase,
+  requests,
+  notify,
+  onChanged,
+}: {
+  supabase: SupabaseClient;
+  requests: DbWasteRequest[];
+  notify: (message: string) => void;
+  onChanged: () => Promise<void>;
+}) {
+  const [drivers, setDrivers] = useState<DispatchDriver[]>([]);
+  const [vehicles, setVehicles] = useState<DispatchVehicle[]>([]);
+  const [requestId, setRequestId] = useState("");
+  const [driverId, setDriverId] = useState("");
+  const [vehicleId, setVehicleId] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const pendingRequests = useMemo(
+    () => requests.filter((request) => request.status === "requested"),
+    [requests],
+  );
+  const driverVehicles = vehicles.filter(
+    (vehicle) => vehicle.driver_id === driverId,
+  );
+
+  const loadResources = useCallback(async () => {
+    const [driverResult, vehicleResult] = await Promise.all([
+      supabase
+        .from("profiles")
+        .select("id, full_name, organizations(name)")
+        .eq("role", "driver")
+        .eq("is_active", true)
+        .order("full_name"),
+      supabase
+        .from("vehicles")
+        .select("id, driver_id, plate_number, capacity_kg")
+        .order("plate_number"),
+    ]);
+
+    if (driverResult.error) {
+      notify(driverResult.error.message);
+      return;
+    }
+    if (vehicleResult.error) {
+      notify(vehicleResult.error.message);
+      return;
+    }
+
+    const nextDrivers = (driverResult.data ?? []) as DispatchDriver[];
+    const nextVehicles = (vehicleResult.data ?? []) as DispatchVehicle[];
+    setDrivers(nextDrivers);
+    setVehicles(nextVehicles);
+    setDriverId((current) => current || nextDrivers[0]?.id || "");
+    setRequestId((current) => current || pendingRequests[0]?.id || "");
+  }, [notify, pendingRequests, supabase]);
+
+  useEffect(() => {
+    void loadResources();
+  }, [loadResources]);
+
+  useEffect(() => {
+    const firstVehicle = vehicles.find(
+      (vehicle) => vehicle.driver_id === driverId,
+    );
+    setVehicleId(firstVehicle?.id ?? "");
+  }, [driverId, vehicles]);
+
+  const registerVehicle = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!driverId) {
+      notify("차량을 배정할 수거기사를 먼저 선택해 주세요.");
+      return;
+    }
+    setBusy(true);
+    const form = new FormData(event.currentTarget);
+    const { error } = await supabase.from("vehicles").insert({
+      driver_id: driverId,
+      plate_number: String(form.get("plateNumber") ?? "").trim(),
+      capacity_kg: Number(form.get("capacityKg")),
+      status: "available",
+    });
+    setBusy(false);
+    if (error) {
+      notify(error.message);
+      return;
+    }
+    event.currentTarget.reset();
+    await loadResources();
+    notify("수거 차량을 등록했습니다.");
+  };
+
+  const assignRequest = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!requestId || !driverId || !vehicleId) {
+      notify("수거 요청, 기사, 차량을 모두 선택해 주세요.");
+      return;
+    }
+    setBusy(true);
+    const form = new FormData(event.currentTarget);
+    const { error } = await supabase.rpc("assign_collection_request", {
+      p_request_id: requestId,
+      p_driver_id: driverId,
+      p_vehicle_id: vehicleId,
+      p_route_order: Number(form.get("routeOrder")) || 1,
+    });
+    setBusy(false);
+    if (error) {
+      notify(error.message);
+      return;
+    }
+    await onChanged();
+    setRequestId("");
+    notify("실제 DB에 배차를 저장하고 기사에게 전달했습니다.");
+  };
+
+  return (
+    <article className="surface dispatch-panel">
+      <div className="surface-heading">
+        <div>
+          <span className="section-kicker">LIVE DISPATCH</span>
+          <h2>기사·차량 배차</h2>
+        </div>
+        <span className="number-pill">{pendingRequests.length}</span>
+      </div>
+      <div className="dispatch-grid">
+        <form onSubmit={assignRequest}>
+          <label>
+            <span>접수 요청</span>
+            <select
+              value={requestId}
+              onChange={(event) => setRequestId(event.target.value)}
+              required
+            >
+              <option value="">접수 요청 선택</option>
+              {pendingRequests.map((request) => (
+                <option key={request.id} value={request.id}>
+                  {request.request_number} ·{" "}
+                  {getOrganizationName(request.organizations)}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            <span>수거기사</span>
+            <select
+              value={driverId}
+              onChange={(event) => setDriverId(event.target.value)}
+              required
+            >
+              <option value="">기사 선택</option>
+              {drivers.map((driver) => (
+                <option key={driver.id} value={driver.id}>
+                  {driver.full_name} ·{" "}
+                  {getOrganizationName(driver.organizations)}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            <span>차량</span>
+            <select
+              value={vehicleId}
+              onChange={(event) => setVehicleId(event.target.value)}
+              required
+            >
+              <option value="">차량 선택</option>
+              {driverVehicles.map((vehicle) => (
+                <option key={vehicle.id} value={vehicle.id}>
+                  {vehicle.plate_number} · {vehicle.capacity_kg}kg
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            <span>방문 순서</span>
+            <input name="routeOrder" type="number" min="1" defaultValue="1" />
+          </label>
+          <button className="primary-action" disabled={busy}>
+            {busy ? "저장 중…" : "배차 확정"}
+          </button>
+        </form>
+        <form className="vehicle-register" onSubmit={registerVehicle}>
+          <div>
+            <strong>배차 차량 등록</strong>
+            <small>선택한 기사에게 새 차량을 연결합니다.</small>
+          </div>
+          <input
+            name="plateNumber"
+            placeholder="부산 80가 1234"
+            aria-label="차량 번호"
+            required
+          />
+          <input
+            name="capacityKg"
+            type="number"
+            min="1"
+            placeholder="적재량 kg"
+            aria-label="차량 적재량"
+            required
+          />
+          <button disabled={busy}>차량 등록</button>
+        </form>
+      </div>
+    </article>
+  );
+}
+
 function AdminOverview({
   notify,
   requests,
   weather,
   weatherLoading,
+  supabase,
+  onChanged,
 }: {
   notify: (message: string) => void;
   requests: DbWasteRequest[];
   weather: WeatherForecast | null;
   weatherLoading: boolean;
+  supabase: SupabaseClient;
+  onChanged: () => Promise<void>;
 }) {
   return (
     <div className="page-stack">
@@ -1007,6 +1345,12 @@ function AdminOverview({
           </div>
         </article>
       </section>
+      <AdminDispatchPanel
+        supabase={supabase}
+        requests={requests}
+        notify={notify}
+        onChanged={onChanged}
+      />
     </div>
   );
 }
@@ -1546,7 +1890,13 @@ const resourceFacility = {
   latitude: 35.0878,
 };
 
-function KakaoRouteMap({ supabase }: { supabase: SupabaseClient }) {
+function KakaoRouteMap({
+  supabase,
+  stops = routeStops,
+}: {
+  supabase: SupabaseClient;
+  stops?: Array<Coordinate & { name: string }>;
+}) {
   const mapContainer = useRef<HTMLDivElement>(null);
   const [route, setRoute] = useState<{
     distanceMeters: number;
@@ -1560,6 +1910,9 @@ function KakaoRouteMap({ supabase }: { supabase: SupabaseClient }) {
 
     const initialize = async () => {
       try {
+        if (stops.length === 0) {
+          throw new Error("배차된 수거지가 없습니다.");
+        }
         const {
           data: { session },
         } = await supabase.auth.getSession();
@@ -1576,7 +1929,7 @@ function KakaoRouteMap({ supabase }: { supabase: SupabaseClient }) {
           body: JSON.stringify({
             origin: resourceFacility,
             destination: resourceFacility,
-            waypoints: routeStops,
+            waypoints: stops,
           }),
         });
         const payload = (await response.json()) as {
@@ -1604,7 +1957,7 @@ function KakaoRouteMap({ supabase }: { supabase: SupabaseClient }) {
         });
         const bounds = new maps.LatLngBounds();
 
-        [resourceFacility, ...routeStops].forEach((stop) => {
+        [resourceFacility, ...stops].forEach((stop) => {
           const position = new maps.LatLng(stop.latitude, stop.longitude);
           bounds.extend(position);
           new maps.Marker({
@@ -1644,7 +1997,7 @@ function KakaoRouteMap({ supabase }: { supabase: SupabaseClient }) {
     return () => {
       cancelled = true;
     };
-  }, [supabase]);
+  }, [stops, supabase]);
 
   const durationMinutes = route
     ? Math.max(1, Math.round(route.durationSeconds / 60))
@@ -1684,7 +2037,7 @@ function KakaoRouteMap({ supabase }: { supabase: SupabaseClient }) {
           </b>
         </span>
         <span>
-          방문 지점 <b>{routeStops.length}곳</b>
+          방문 지점 <b>{stops.length}곳</b>
         </span>
       </div>
     </>
@@ -2060,6 +2413,703 @@ function FacilityWorkspace({ notify }: { notify: (message: string) => void }) {
   );
 }
 
+function LiveDriverWorkspace({
+  notify,
+  supabase,
+  profile,
+  weather,
+  weatherLoading,
+}: {
+  notify: (message: string) => void;
+  supabase: SupabaseClient;
+  profile: Profile;
+  weather: WeatherForecast | null;
+  weatherLoading: boolean;
+}) {
+  const [assignments, setAssignments] = useState<DriverAssignment[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [busyId, setBusyId] = useState("");
+  const [weights, setWeights] = useState<Record<string, string>>({});
+  const [photos, setPhotos] = useState<Record<string, File | null>>({});
+
+  const loadAssignments = useCallback(async () => {
+    const { data, error } = await supabase
+      .from("collection_assignments")
+      .select(
+        "id, route_order, assigned_at, started_at, arrived_at, collected_at, actual_weight_kg, vehicles(plate_number), waste_requests(id, request_number, waste_type, estimated_weight_kg, pickup_address, latitude, longitude, status, organizations(name))",
+      )
+      .order("route_order", { ascending: true });
+
+    if (error) {
+      notify(error.message);
+      setLoading(false);
+      return;
+    }
+    setAssignments((data ?? []) as unknown as DriverAssignment[]);
+    setLoading(false);
+  }, [notify, supabase]);
+
+  useEffect(() => {
+    void loadAssignments();
+    const channel = supabase
+      .channel(`driver-workflow-${profile.id}`)
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "collection_assignments" },
+        () => void loadAssignments(),
+      )
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "waste_requests" },
+        () => void loadAssignments(),
+      )
+      .subscribe();
+    return () => {
+      void supabase.removeChannel(channel);
+    };
+  }, [loadAssignments, profile.id, supabase]);
+
+  const getTaskStatus = (assignment: DriverAssignment): DriverTaskStatus => {
+    const request = firstRelation(assignment.waste_requests);
+    if (
+      !request ||
+      ["collected", "in_transit", "received", "processing", "completed"].includes(
+        request.status,
+      )
+    ) {
+      return "수거 완료";
+    }
+    if (request.status === "collecting" && assignment.arrived_at) return "도착";
+    if (request.status === "collecting") return "이동 중";
+    return "대기";
+  };
+
+  const taskStops = useMemo(
+    () =>
+      assignments.flatMap((assignment) => {
+        const request = firstRelation(assignment.waste_requests);
+        if (
+          !request ||
+          request.latitude === null ||
+          request.longitude === null ||
+          getTaskStatus(assignment) === "수거 완료"
+        ) {
+          return [];
+        }
+        return [
+          {
+            name: getOrganizationName(request.organizations),
+            latitude: Number(request.latitude),
+            longitude: Number(request.longitude),
+          },
+        ];
+      }),
+    [assignments],
+  );
+
+  const activeAssignments = assignments.filter(
+    (assignment) => getTaskStatus(assignment) !== "수거 완료",
+  );
+  const expectedWeight = activeAssignments.reduce((sum, assignment) => {
+    const request = firstRelation(assignment.waste_requests);
+    return sum + Number(request?.estimated_weight_kg ?? 0);
+  }, 0);
+
+  const advanceTask = async (assignment: DriverAssignment) => {
+    const status = getTaskStatus(assignment);
+    const request = firstRelation(assignment.waste_requests);
+    if (!request || status === "수거 완료") return;
+    setBusyId(assignment.id);
+    let photoPath: string | null = null;
+
+    try {
+      if (status === "도착" && photos[assignment.id]) {
+        const photo = photos[assignment.id]!;
+        const extension = photo.name.split(".").pop()?.toLowerCase() || "jpg";
+        photoPath = `${profile.id}/collection-${assignment.id}-${crypto.randomUUID()}.${extension}`;
+        const { error: uploadError } = await supabase.storage
+          .from("evidence")
+          .upload(photoPath, photo, {
+            contentType: photo.type || "image/jpeg",
+            upsert: false,
+          });
+        if (uploadError) throw uploadError;
+      }
+
+      const { error } = await supabase.rpc("advance_collection_assignment", {
+        p_assignment_id: assignment.id,
+        p_actual_weight_kg:
+          status === "도착" ? Number(weights[assignment.id]) : null,
+        p_collection_photo_path: photoPath,
+        p_driver_note: null,
+      });
+      if (error) throw error;
+
+      await loadAssignments();
+      notify(
+        status === "대기"
+          ? `${getOrganizationName(request.organizations)} 수거 운행을 시작했습니다.`
+          : status === "이동 중"
+            ? "수거지 도착 시간을 저장했습니다."
+            : "실제 중량과 수거 결과를 저장했습니다.",
+      );
+    } catch (caught) {
+      if (photoPath) {
+        await supabase.storage.from("evidence").remove([photoPath]);
+      }
+      notify(
+        caught instanceof Error
+          ? caught.message
+          : "수거 상태를 저장하지 못했습니다.",
+      );
+    } finally {
+      setBusyId("");
+    }
+  };
+
+  return (
+    <div className="driver-shell">
+      <section className="driver-top">
+        <div>
+          <span className="page-kicker">DRIVER MOBILE · LIVE DB</span>
+          <h1>안전 운행하세요, {profile.full_name} 기사님.</h1>
+          <p>
+            오늘 {activeAssignments.length}개 지점 · 예상 수거량{" "}
+            {(expectedWeight / 1000).toFixed(2)}톤
+          </p>
+        </div>
+        <div className="driver-weather">
+          <span>{weather?.symbol ?? "…"}</span>
+          <div>
+            <strong>
+              {weatherLoading
+                ? "부산 예보 확인 중"
+                : weather
+                  ? `${Math.round(weather.temperatureC)}° · ${weather.weather}`
+                  : "기상 정보 조회 실패"}
+            </strong>
+            <small>
+              {weather
+                ? `강수 ${weather.precipitationProbability}% · 위험도 ${weather.riskLevel}`
+                : "연결 상태를 확인해 주세요."}
+            </small>
+          </div>
+        </div>
+      </section>
+
+      <section className="driver-grid">
+        <article className="surface route-map-card">
+          <div className="surface-heading">
+            <div>
+              <span className="section-kicker">LIVE ROUTE</span>
+              <h2>배차된 수거 경로</h2>
+            </div>
+            <span className="route-saving">실시간 DB</span>
+          </div>
+          <KakaoRouteMap supabase={supabase} stops={taskStops} />
+        </article>
+
+        <article className="task-stack">
+          <div className="task-heading">
+            <div>
+              <span className="section-kicker">PICKUP LIST</span>
+              <h2>수거 일정</h2>
+            </div>
+            <span>{assignments.length}건</span>
+          </div>
+          {loading && <div className="surface request-empty">배차를 불러오는 중입니다.</div>}
+          {!loading && assignments.length === 0 && (
+            <div className="surface request-empty">
+              관리자에게 배차된 수거 요청이 아직 없습니다.
+            </div>
+          )}
+          {assignments.map((assignment) => {
+            const request = firstRelation(assignment.waste_requests);
+            if (!request) return null;
+            const status = getTaskStatus(assignment);
+            const vehicle = firstRelation(assignment.vehicles);
+            return (
+              <article
+                className={`surface driver-task ${status === "이동 중" ? "active" : ""}`}
+                key={assignment.id}
+              >
+                <div className="task-order">{assignment.route_order ?? "–"}</div>
+                <div className="task-copy">
+                  <div>
+                    <strong>{getOrganizationName(request.organizations)}</strong>
+                    <StatusBadge status={status} />
+                  </div>
+                  <p>{request.pickup_address}</p>
+                  <span>
+                    {request.waste_type} · 예상{" "}
+                    {Number(request.estimated_weight_kg).toLocaleString()}kg ·{" "}
+                    {vehicle?.plate_number ?? "차량 미지정"}
+                  </span>
+                </div>
+                {status === "도착" && (
+                  <div className="task-result-fields">
+                    <label>
+                      <span>실제 수거 중량</span>
+                      <input
+                        type="number"
+                        min="0.01"
+                        step="0.01"
+                        value={
+                          weights[assignment.id] ??
+                          String(request.estimated_weight_kg)
+                        }
+                        onChange={(event) =>
+                          setWeights((current) => ({
+                            ...current,
+                            [assignment.id]: event.target.value,
+                          }))
+                        }
+                      />
+                      <b>kg</b>
+                    </label>
+                    <label className="task-photo">
+                      <span>수거 증빙 사진</span>
+                      <input
+                        type="file"
+                        accept="image/*"
+                        onChange={(event) =>
+                          setPhotos((current) => ({
+                            ...current,
+                            [assignment.id]: event.target.files?.[0] ?? null,
+                          }))
+                        }
+                      />
+                    </label>
+                  </div>
+                )}
+                <button
+                  disabled={
+                    status === "수거 완료" || busyId === assignment.id
+                  }
+                  onClick={() => void advanceTask(assignment)}
+                >
+                  {busyId === assignment.id && "저장 중…"}
+                  {busyId !== assignment.id && status === "대기" && "운행 시작"}
+                  {busyId !== assignment.id &&
+                    status === "이동 중" &&
+                    "도착 처리"}
+                  {busyId !== assignment.id &&
+                    status === "도착" &&
+                    "수거 완료 저장"}
+                  {busyId !== assignment.id &&
+                    status === "수거 완료" &&
+                    "완료"}
+                </button>
+              </article>
+            );
+          })}
+        </article>
+      </section>
+    </div>
+  );
+}
+
+function LiveFacilityWorkspace({
+  notify,
+  supabase,
+  profile,
+}: {
+  notify: (message: string) => void;
+  supabase: SupabaseClient;
+  profile: Profile;
+}) {
+  const [items, setItems] = useState<FacilityWorkItem[]>([]);
+  const [selectedId, setSelectedId] = useState("");
+  const [dailyWeightKg, setDailyWeightKg] = useState(0);
+  const [scalePhoto, setScalePhoto] = useState<File | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [loading, setLoading] = useState(true);
+
+  const loadFacilityWork = useCallback(async () => {
+    const startOfDay = new Date();
+    startOfDay.setHours(0, 0, 0, 0);
+    const [workResult, receiptResult] = await Promise.all([
+      supabase
+        .from("waste_requests")
+        .select(
+          "id, request_number, waste_type, estimated_weight_kg, status, organizations(name), collection_assignments(actual_weight_kg, collected_at, vehicles(plate_number)), facility_receipts(id, measured_weight_kg, received_at, processing_results(id, processing_method, processing_line, input_weight_kg, output_weight_kg))",
+        )
+        .in("status", ["collected", "in_transit", "processing"])
+        .order("updated_at", { ascending: true }),
+      supabase
+        .from("facility_receipts")
+        .select("measured_weight_kg")
+        .gte("received_at", startOfDay.toISOString()),
+    ]);
+
+    if (workResult.error) {
+      notify(workResult.error.message);
+      setLoading(false);
+      return;
+    }
+    if (receiptResult.error) {
+      notify(receiptResult.error.message);
+    }
+
+    const nextItems = (workResult.data ?? []) as unknown as FacilityWorkItem[];
+    setItems(nextItems);
+    setSelectedId((current) =>
+      nextItems.some((item) => item.id === current)
+        ? current
+        : nextItems[0]?.id ?? "",
+    );
+    setDailyWeightKg(
+      (receiptResult.data ?? []).reduce(
+        (sum, receipt) => sum + Number(receipt.measured_weight_kg),
+        0,
+      ),
+    );
+    setLoading(false);
+  }, [notify, supabase]);
+
+  useEffect(() => {
+    void loadFacilityWork();
+    const channel = supabase
+      .channel(`facility-workflow-${profile.id}`)
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "waste_requests" },
+        () => void loadFacilityWork(),
+      )
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "facility_receipts" },
+        () => void loadFacilityWork(),
+      )
+      .subscribe();
+    return () => {
+      void supabase.removeChannel(channel);
+    };
+  }, [loadFacilityWork, profile.id, supabase]);
+
+  const current = items.find((item) => item.id === selectedId) ?? items[0];
+  const assignment = firstRelation(current?.collection_assignments);
+  const vehicle = firstRelation(assignment?.vehicles);
+  const receipt = firstRelation(current?.facility_receipts);
+  const processing = firstRelation(receipt?.processing_results);
+  const isProcessing = current?.status === "processing";
+
+  const submitFacilityResult = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!current) return;
+    setBusy(true);
+    const form = new FormData(event.currentTarget);
+    let photoPath: string | null = null;
+
+    try {
+      if (!isProcessing && scalePhoto) {
+        const extension =
+          scalePhoto.name.split(".").pop()?.toLowerCase() || "jpg";
+        photoPath = `${profile.id}/scale-${current.id}-${crypto.randomUUID()}.${extension}`;
+        const { error: uploadError } = await supabase.storage
+          .from("evidence")
+          .upload(photoPath, scalePhoto, {
+            contentType: scalePhoto.type || "image/jpeg",
+            upsert: false,
+          });
+        if (uploadError) throw uploadError;
+      }
+
+      const result = isProcessing
+        ? await supabase.rpc("complete_processing_result", {
+            p_request_id: current.id,
+            p_output_weight_kg: Number(form.get("outputWeight")),
+            p_result_note: String(form.get("resultNote") ?? "").trim() || null,
+          })
+        : await supabase.rpc("record_facility_receipt", {
+            p_request_id: current.id,
+            p_measured_weight_kg: Number(form.get("measuredWeight")),
+            p_quality_status: String(form.get("qualityStatus") ?? ""),
+            p_foreign_material_status: String(
+              form.get("foreignMaterialStatus") ?? "",
+            ),
+            p_scale_photo_path: photoPath,
+            p_inspection_note:
+              String(form.get("inspectionNote") ?? "").trim() || null,
+            p_processing_method: String(form.get("processingMethod") ?? ""),
+            p_processing_line: String(form.get("processingLine") ?? ""),
+          });
+      if (result.error) throw result.error;
+
+      setScalePhoto(null);
+      await loadFacilityWork();
+      notify(
+        isProcessing
+          ? `${getOrganizationName(current.organizations)} 처리 결과를 완료했습니다.`
+          : `${getOrganizationName(current.organizations)} 반입·검수 결과를 저장했습니다.`,
+      );
+    } catch (caught) {
+      if (photoPath) {
+        await supabase.storage.from("evidence").remove([photoPath]);
+      }
+      notify(
+        caught instanceof Error
+          ? caught.message
+          : "시설 처리 결과를 저장하지 못했습니다.",
+      );
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="page-stack">
+      <section className="workspace-title">
+        <div>
+          <span className="page-kicker">RESOURCE FACILITY · LIVE DB</span>
+          <h1>반입·검수·처리</h1>
+          <p>수거 완료 데이터부터 계량과 자원화 결과까지 실제 DB에 기록합니다.</p>
+        </div>
+        <div className="facility-live">
+          <i />
+          <div>
+            <strong>시설 정상 운영</strong>
+            <small>금일 누적 반입 {(dailyWeightKg / 1000).toFixed(2)}t</small>
+          </div>
+        </div>
+      </section>
+
+      <section className="facility-grid">
+        <article className="surface inbound-list">
+          <div className="surface-heading">
+            <div>
+              <span className="section-kicker">LIVE INBOUND</span>
+              <h2>입고·처리 대기</h2>
+            </div>
+            <span className="number-pill">{items.length}</span>
+          </div>
+          {loading && <div className="request-empty">입고 정보를 불러오는 중입니다.</div>}
+          {!loading && items.length === 0 && (
+            <div className="request-empty">수거 완료된 입고 예정 건이 없습니다.</div>
+          )}
+          {items.map((item) => {
+            const itemAssignment = firstRelation(item.collection_assignments);
+            const itemVehicle = firstRelation(itemAssignment?.vehicles);
+            return (
+              <button
+                className={current?.id === item.id ? "selected" : ""}
+                key={item.id}
+                onClick={() => {
+                  setSelectedId(item.id);
+                  setScalePhoto(null);
+                }}
+              >
+                <time>
+                  {itemAssignment?.collected_at
+                    ? new Date(itemAssignment.collected_at).toLocaleTimeString(
+                        "ko-KR",
+                        { hour: "2-digit", minute: "2-digit" },
+                      )
+                    : "대기"}
+                </time>
+                <div>
+                  <strong>{getOrganizationName(item.organizations)}</strong>
+                  <span>
+                    {item.waste_type} ·{" "}
+                    {Number(
+                      itemAssignment?.actual_weight_kg ??
+                        item.estimated_weight_kg,
+                    ).toLocaleString()}
+                    kg
+                  </span>
+                  <small>
+                    {item.status === "processing"
+                      ? "처리 중"
+                      : itemVehicle?.plate_number ?? "차량 정보 없음"}
+                  </small>
+                </div>
+                <b>›</b>
+              </button>
+            );
+          })}
+        </article>
+
+        {current ? (
+          <form className="surface inspection-card" onSubmit={submitFacilityResult}>
+            <div className="surface-heading">
+              <div>
+                <span className="section-kicker">
+                  {isProcessing ? "PROCESSING RESULT" : "INSPECTION"}
+                </span>
+                <h2>{isProcessing ? "자원화 처리 결과" : "반입 검수서"}</h2>
+              </div>
+              <StatusBadge status={isProcessing ? "처리 중" : "수거 완료"} />
+            </div>
+            <div className="inspection-summary">
+              <span className="truck-mark">차</span>
+              <div>
+                <strong>{getOrganizationName(current.organizations)}</strong>
+                <span>
+                  {vehicle?.plate_number ?? "차량 정보 없음"} ·{" "}
+                  {current.waste_type}
+                </span>
+              </div>
+              <b>
+                수거{" "}
+                {Number(
+                  assignment?.actual_weight_kg ?? current.estimated_weight_kg,
+                ).toLocaleString()}
+                kg
+              </b>
+            </div>
+
+            <div className="weight-card">
+              <span>{isProcessing ? "처리 후 생산량" : "실계량 중량"}</span>
+              <div>
+                <input
+                  name={isProcessing ? "outputWeight" : "measuredWeight"}
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  defaultValue={
+                    isProcessing
+                      ? processing?.output_weight_kg ?? ""
+                      : assignment?.actual_weight_kg ??
+                        current.estimated_weight_kg
+                  }
+                  required
+                />
+                <b>kg</b>
+              </div>
+              <small>
+                {isProcessing
+                  ? `${processing?.processing_method ?? "처리"} · ${processing?.processing_line ?? "라인 미지정"}`
+                  : "계근대 연동 전 수동 입력 모드입니다."}
+              </small>
+            </div>
+
+            {!isProcessing ? (
+              <>
+                <div className="inspection-form">
+                  <label>
+                    <span>품질 상태</span>
+                    <select name="qualityStatus" defaultValue="양호">
+                      <option>양호</option>
+                      <option>주의</option>
+                      <option>반입 불가</option>
+                    </select>
+                  </label>
+                  <label>
+                    <span>이물질 여부</span>
+                    <select name="foreignMaterialStatus" defaultValue="없음">
+                      <option>없음</option>
+                      <option>소량 검출</option>
+                      <option>다량 검출</option>
+                    </select>
+                  </label>
+                  <label>
+                    <span>처리 방식</span>
+                    <select name="processingMethod" defaultValue="혐기성 소화">
+                      <option>혐기성 소화</option>
+                      <option>사료화</option>
+                      <option>퇴비화</option>
+                    </select>
+                  </label>
+                  <label>
+                    <span>처리 라인</span>
+                    <select name="processingLine" defaultValue="A-01">
+                      <option>A-01</option>
+                      <option>A-02</option>
+                      <option>B-01</option>
+                    </select>
+                  </label>
+                  <label className="full">
+                    <span>검수 메모</span>
+                    <textarea
+                      name="inspectionNote"
+                      defaultValue="육안 검사 결과 특이사항 없음"
+                    />
+                  </label>
+                </div>
+                <div className="proof-upload">
+                  <input
+                    id="live-scale-photo"
+                    type="file"
+                    accept="image/*"
+                    onChange={(event) =>
+                      setScalePhoto(event.target.files?.[0] ?? null)
+                    }
+                  />
+                  <label htmlFor="live-scale-photo">
+                    <span>＋</span>
+                    <div>
+                      <strong>계량·증빙 사진 첨부</strong>
+                      <small>
+                        {scalePhoto?.name ?? "클릭하여 사진을 선택하세요."}
+                      </small>
+                    </div>
+                  </label>
+                </div>
+              </>
+            ) : (
+              <label className="processing-note">
+                <span>처리 결과 메모</span>
+                <textarea
+                  name="resultNote"
+                  placeholder="생산량, 품질, 특이사항을 기록하세요."
+                />
+              </label>
+            )}
+
+            <button
+              className="primary-action full-action"
+              type="submit"
+              disabled={busy}
+            >
+              {busy
+                ? "DB 저장 중…"
+                : isProcessing
+                  ? "처리 완료 저장"
+                  : "검수 완료 및 반입 처리"}
+            </button>
+          </form>
+        ) : (
+          <article className="surface inspection-card request-empty">
+            처리할 입고 건을 선택해 주세요.
+          </article>
+        )}
+
+        <article className="surface daily-throughput">
+          <div className="surface-heading">
+            <div>
+              <span className="section-kicker">DAILY THROUGHPUT</span>
+              <h2>오늘의 실제 반입량</h2>
+            </div>
+          </div>
+          <div className="throughput-number">
+            <strong>{(dailyWeightKg / 1000).toFixed(2)}</strong>
+            <span>ton</span>
+            <small>Supabase 계량 기록 합계</small>
+          </div>
+          <div className="throughput-bar">
+            <i
+              style={{
+                width: `${Math.min(100, (dailyWeightKg / 7000) * 100)}%`,
+              }}
+            />
+          </div>
+          <div className="throughput-types">
+            <span>
+              <i className="type-one" />
+              입고·처리 대기 <b>{items.length}건</b>
+            </span>
+            <span>
+              <i className="type-two" />
+              처리 중{" "}
+              <b>{items.filter((item) => item.status === "processing").length}건</b>
+            </span>
+          </div>
+        </article>
+      </section>
+    </div>
+  );
+}
+
 function IntegrationsWorkspace({
   notify,
   supabase,
@@ -2355,7 +3405,9 @@ export default function Home() {
       facility: "facility",
     };
     return navigation.filter(
-      (item) => item.id === allowedWorkspace[profile.role],
+      (item) =>
+        item.id ===
+        allowedWorkspace[profile.role as Exclude<UserRole, "admin">],
     );
   }, [profile]);
 
@@ -2500,6 +3552,8 @@ export default function Home() {
               requests={requests}
               weather={weather}
               weatherLoading={weatherLoading}
+              supabase={supabase}
+              onChanged={loadRequests}
             />
           )}
           {workspace === "discharger" && (
@@ -2511,14 +3565,21 @@ export default function Home() {
             />
           )}
           {workspace === "driver" && (
-            <DriverWorkspace
+            <LiveDriverWorkspace
               notify={notify}
               supabase={supabase}
+              profile={profile}
               weather={weather}
               weatherLoading={weatherLoading}
             />
           )}
-          {workspace === "facility" && <FacilityWorkspace notify={notify} />}
+          {workspace === "facility" && (
+            <LiveFacilityWorkspace
+              notify={notify}
+              supabase={supabase}
+              profile={profile}
+            />
+          )}
           {workspace === "integrations" && (
             <IntegrationsWorkspace
               notify={notify}
