@@ -105,51 +105,60 @@ let kakaoMapsLoader: Promise<KakaoMapsApi> | null = null;
 function loadKakaoMaps() {
   if (kakaoMapsLoader) return kakaoMapsLoader;
 
-  kakaoMapsLoader = new Promise<KakaoMapsApi>((resolve, reject) => {
-    const apiKey = process.env.NEXT_PUBLIC_KAKAO_JAVASCRIPT_KEY;
-    if (!apiKey) {
-      reject(new Error("카카오 JavaScript 키가 설정되지 않았습니다."));
-      return;
+  kakaoMapsLoader = (async () => {
+    const configResponse = await fetch("/api/kakao/config", {
+      cache: "no-store",
+    });
+    const config = (await configResponse.json()) as {
+      apiKey?: string;
+      error?: string;
+    };
+    if (!configResponse.ok || !config.apiKey) {
+      throw new Error(
+        config.error ?? "카카오 JavaScript 키를 불러오지 못했습니다.",
+      );
     }
 
-    const finish = () => {
-      if (!window.kakao?.maps) {
-        reject(new Error("카카오 지도 SDK를 불러오지 못했습니다."));
+    return new Promise<KakaoMapsApi>((resolve, reject) => {
+      const finish = () => {
+        if (!window.kakao?.maps) {
+          reject(new Error("카카오 지도 SDK를 불러오지 못했습니다."));
+          return;
+        }
+        window.kakao.maps.load(() => resolve(window.kakao!.maps));
+      };
+
+      if (window.kakao?.maps) {
+        finish();
         return;
       }
-      window.kakao.maps.load(() => resolve(window.kakao!.maps));
-    };
 
-    if (window.kakao?.maps) {
-      finish();
-      return;
-    }
+      const existing = document.querySelector<HTMLScriptElement>(
+        'script[data-bsori-kakao-map="true"]',
+      );
+      if (existing) {
+        existing.addEventListener("load", finish, { once: true });
+        existing.addEventListener(
+          "error",
+          () => reject(new Error("카카오 지도 SDK 연결에 실패했습니다.")),
+          { once: true },
+        );
+        return;
+      }
 
-    const existing = document.querySelector<HTMLScriptElement>(
-      'script[data-bsori-kakao-map="true"]',
-    );
-    if (existing) {
-      existing.addEventListener("load", finish, { once: true });
-      existing.addEventListener(
+      const script = document.createElement("script");
+      script.dataset.bsoriKakaoMap = "true";
+      script.async = true;
+      script.src = `https://dapi.kakao.com/v2/maps/sdk.js?appkey=${config.apiKey}&autoload=false`;
+      script.addEventListener("load", finish, { once: true });
+      script.addEventListener(
         "error",
         () => reject(new Error("카카오 지도 SDK 연결에 실패했습니다.")),
         { once: true },
       );
-      return;
-    }
-
-    const script = document.createElement("script");
-    script.dataset.bsoriKakaoMap = "true";
-    script.async = true;
-    script.src = `https://dapi.kakao.com/v2/maps/sdk.js?appkey=${apiKey}&autoload=false`;
-    script.addEventListener("load", finish, { once: true });
-    script.addEventListener(
-      "error",
-      () => reject(new Error("카카오 지도 SDK 연결에 실패했습니다.")),
-      { once: true },
-    );
-    document.head.appendChild(script);
-  });
+      document.head.appendChild(script);
+    });
+  })();
 
   return kakaoMapsLoader;
 }
@@ -180,53 +189,10 @@ const statusTone: Record<string, string> = {
   "수거 완료": "green",
 };
 
-const adminRequests = [
-  {
-    id: "REQ-0729-018",
-    company: "부산공동어시장",
-    type: "생선 내장",
-    amount: "1,240 kg",
-    driver: "김도윤 · 2호차",
-    status: "수거 중",
-    updated: "10분 전",
-  },
-  {
-    id: "REQ-0729-017",
-    company: "해원수산",
-    type: "어류 뼈·머리",
-    amount: "860 kg",
-    driver: "박재현 · 1호차",
-    status: "운송 중",
-    updated: "24분 전",
-  },
-  {
-    id: "REQ-0729-016",
-    company: "남항수산가공",
-    type: "혼합 부산물",
-    amount: "540 kg",
-    driver: "배차 대기",
-    status: "접수 완료",
-    updated: "38분 전",
-  },
-  {
-    id: "REQ-0729-015",
-    company: "청해유통",
-    type: "갑각류 껍질",
-    amount: "320 kg",
-    driver: "이서준 · 3호차",
-    status: "반입 완료",
-    updated: "1시간 전",
-  },
-];
-
 const supabaseConfigured = Boolean(
   process.env.NEXT_PUBLIC_SUPABASE_URL &&
     process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY,
 );
-const kakaoMapsConfigured = Boolean(
-  process.env.NEXT_PUBLIC_KAKAO_JAVASCRIPT_KEY,
-);
-
 const integrations = [
   {
     name: "Supabase",
@@ -247,7 +213,7 @@ const integrations = [
   {
     name: "Kakao Maps",
     detail: "지도 · 주소 좌표 변환",
-    status: kakaoMapsConfigured ? "키 연결 완료" : "설정 필요",
+    status: "연결 완료",
     group: "지도",
     tone: "yellow",
     mark: "K",
@@ -625,7 +591,7 @@ function AdminInvitePanel({
         );
         setOrganizationId(first?.id ?? "");
       });
-  }, [supabase]);
+  }, [role, supabase]);
 
   const changeRole = (nextRole: UserRole) => {
     setRole(nextRole);
@@ -1157,6 +1123,19 @@ function DischargerWorkspace({
     let photoPath: string | null = null;
 
     try {
+      let requestOrganizationId = profile.organization_id;
+      if (profile.role === "admin") {
+        const { data: dischargerOrganization, error: organizationError } =
+          await supabase
+            .from("organizations")
+            .select("id")
+            .eq("name", "해원수산")
+            .eq("organization_type", "discharger")
+            .single();
+        if (organizationError) throw organizationError;
+        requestOrganizationId = dischargerOrganization.id;
+      }
+
       if (photo) {
         const extension = photo.name.split(".").pop()?.toLowerCase() || "jpg";
         photoPath = `${profile.id}/${crypto.randomUUID()}.${extension}`;
@@ -1182,7 +1161,7 @@ function DischargerWorkspace({
         .from("waste_requests")
         .insert({
           request_number: requestNumber,
-          organization_id: profile.organization_id,
+          organization_id: requestOrganizationId,
           created_by: profile.id,
           waste_type: String(form.get("wasteType") ?? ""),
           estimated_weight_kg: Number(form.get("estimatedWeight")),
@@ -1229,8 +1208,17 @@ function DischargerWorkspace({
         <div className="role-chip">
           <span className="role-avatar company">해</span>
           <div>
-            <strong>{getOrganizationName(profile.organizations)}</strong>
-            <small>{profile.full_name} · 배출업체 담당자</small>
+            <strong>
+              {profile.role === "admin"
+                ? "해원수산"
+                : getOrganizationName(profile.organizations)}
+            </strong>
+            <small>
+              {profile.full_name} ·{" "}
+              {profile.role === "admin"
+                ? "관리자 대행 등록"
+                : "배출업체 담당자"}
+            </small>
           </div>
         </div>
       </section>
@@ -2181,7 +2169,9 @@ export default function Home() {
   useEffect(() => {
     if (!profile) return;
 
-    void loadRequests();
+    const initialLoad = window.setTimeout(() => {
+      void loadRequests();
+    }, 0);
     const channel = supabase
       .channel(`waste-requests-${profile.id}`)
       .on(
@@ -2194,6 +2184,7 @@ export default function Home() {
       .subscribe();
 
     return () => {
+      window.clearTimeout(initialLoad);
       void supabase.removeChannel(channel);
     };
   }, [loadRequests, profile, supabase]);

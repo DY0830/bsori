@@ -57,7 +57,7 @@ Gemini 키는 배포 환경의 서버 전용 `GEMINI_API_KEY`에 저장합니다
 
 ## Kakao 지도와 길찾기
 
-- `NEXT_PUBLIC_KAKAO_JAVASCRIPT_KEY`: 브라우저 지도 표시
+- `KAKAO_JAVASCRIPT_KEY`: 서버가 현재 실행 환경에 맞춰 전달하는 지도 키
 - `KAKAO_REST_API_KEY`: 서버 주소 검색과 Kakao Mobility 길찾기
 
 운영 사이트와 localhost는 각각 해당 도메인이 등록된 JavaScript 키를
