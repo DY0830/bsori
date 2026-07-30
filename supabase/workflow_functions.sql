@@ -88,12 +88,17 @@ declare
   v_assignment public.collection_assignments;
   v_status public.request_status;
 begin
-  select a, r.status
-  into v_assignment, v_status
+  select a.*
+  into v_assignment
   from public.collection_assignments a
-  join public.waste_requests r on r.id = a.request_id
   where a.id = p_assignment_id
-  for update of a, r;
+  for update;
+
+  select r.status
+  into v_status
+  from public.waste_requests r
+  where r.id = v_assignment.request_id
+  for update;
 
   if v_assignment.id is null then
     raise exception '배차 정보를 찾을 수 없습니다.';
@@ -294,12 +299,17 @@ begin
     raise exception '처리 후 생산량을 입력해 주세요.';
   end if;
 
-  select fr, wr.status
-  into v_receipt, v_status
+  select fr.*
+  into v_receipt
   from public.facility_receipts fr
-  join public.waste_requests wr on wr.id = fr.request_id
   where fr.request_id = p_request_id
-  for update of fr, wr;
+  for update;
+
+  select wr.status
+  into v_status
+  from public.waste_requests wr
+  where wr.id = p_request_id
+  for update;
 
   if v_receipt.id is null or v_status <> 'processing' then
     raise exception '처리 중인 반입 기록을 찾을 수 없습니다.';
