@@ -7,27 +7,21 @@ export async function generateMetadata(): Promise<Metadata> {
   const host = requestHeaders.get("x-forwarded-host") ?? requestHeaders.get("host") ?? "localhost:3000";
   const protocol = requestHeaders.get("x-forwarded-proto") ?? (host.startsWith("localhost") ? "http" : "https");
   const origin = `${protocol}://${host}`;
-  const title = "B.SORI | AI 해양 바이오에너지 순환 플랫폼";
-  const description = "수산 부산물 발생 예측부터 수거, 바이오가스 생산과 ESS까지 연결하는 통합 운영 플랫폼";
+  const title = "B.SORI | 수산 부산물 통합 관리 플랫폼";
+  const description = "배출업체, 수거기사, 자원화시설, 관리자를 연결하는 수산 부산물 등록·수거·반입·처리 통합 웹 시스템";
 
   return {
     title,
     description,
-    icons: {
-      icon: "/favicon.svg",
-      shortcut: "/favicon.svg",
-    },
+    applicationName: "B.SORI",
+    manifest: "/manifest.webmanifest",
+    icons: { icon: "/favicon.svg", shortcut: "/favicon.svg" },
     openGraph: {
       title,
       description,
-      images: [{ url: `${origin}/og.png`, width: 1536, height: 909, alt: "B.SORI 플랫폼" }],
+      images: [{ url: `${origin}/og.png`, width: 1717, height: 916, alt: "B.SORI 수산 부산물 통합 관리 플랫폼" }],
     },
-    twitter: {
-      card: "summary_large_image",
-      title,
-      description,
-      images: [`${origin}/og.png`],
-    },
+    twitter: { card: "summary_large_image", title, description, images: [`${origin}/og.png`] },
   };
 }
 
