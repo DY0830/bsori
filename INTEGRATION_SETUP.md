@@ -75,3 +75,16 @@ Gemini 키는 배포 환경의 서버 전용 `GEMINI_API_KEY`에 저장합니다
 
 외부 API Secret은 브라우저 코드에 넣지 않고 Supabase Edge Functions 또는
 배포 서비스의 Secret으로만 등록합니다.
+
+## Render 배포
+
+프로젝트 루트의 `render.yaml`을 이용해 Render Blueprint로 배포할 수 있습니다.
+
+1. GitHub의 `DY0830/bsori` 저장소가 최신인지 확인합니다.
+2. Render에서 **New > Blueprint**를 선택하고 저장소를 연결합니다.
+3. Blueprint가 요청하는 환경변수 값을 Render Dashboard에 입력합니다.
+4. 배포 후 발급된 `https://...onrender.com` 주소를 Kakao Developers의
+   JavaScript SDK 도메인과 Supabase Auth의 Redirect URLs에 추가합니다.
+
+빌드 명령은 `npm ci && npm run build`, 시작 명령은 `npm run start`이며
+서버는 Render가 제공하는 `PORT` 환경변수를 자동으로 사용합니다.
