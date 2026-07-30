@@ -1120,6 +1120,11 @@ function DischargerWorkspace({
     setRegistered("");
 
     const form = new FormData(event.currentTarget);
+    const wasteType = String(form.get("wasteType") ?? "");
+    const estimatedWeightKg = Number(form.get("estimatedWeight"));
+    const preferredPickupAt =
+      String(form.get("preferredPickupAt") ?? "") || null;
+    const pickupAddressValue = String(form.get("pickupAddress") ?? "");
     let photoPath: string | null = null;
 
     try {
@@ -1163,12 +1168,11 @@ function DischargerWorkspace({
           request_number: requestNumber,
           organization_id: requestOrganizationId,
           created_by: profile.id,
-          waste_type: String(form.get("wasteType") ?? ""),
-          estimated_weight_kg: Number(form.get("estimatedWeight")),
+          waste_type: wasteType,
+          estimated_weight_kg: estimatedWeightKg,
           storage_condition: String(form.get("storageCondition") ?? ""),
-          preferred_pickup_at:
-            String(form.get("preferredPickupAt") ?? "") || null,
-          pickup_address: String(form.get("pickupAddress") ?? ""),
+          preferred_pickup_at: preferredPickupAt,
+          pickup_address: pickupAddressValue,
           latitude: pickupCoordinate?.latitude ?? null,
           longitude: pickupCoordinate?.longitude ?? null,
           memo: String(form.get("memo") ?? ""),
@@ -1180,8 +1184,45 @@ function DischargerWorkspace({
 
       if (insertError) throw insertError;
 
+      let emailSent = false;
+      try {
+        const {
+          data: { session },
+        } = await supabase.auth.getSession();
+        if (session?.access_token) {
+          const emailResponse = await fetch(
+            "/api/notifications/request-created",
+            {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                Authorization: `Bearer ${session.access_token}`,
+              },
+              body: JSON.stringify({
+                requestNumber,
+                organizationName:
+                  profile.role === "admin"
+                    ? "해원수산"
+                    : getOrganizationName(profile.organizations),
+                wasteType,
+                estimatedWeightKg,
+                pickupAddress: pickupAddressValue,
+                preferredPickupAt,
+              }),
+            },
+          );
+          emailSent = emailResponse.ok;
+        }
+      } catch {
+        emailSent = false;
+      }
+
       setRegistered(requestNumber);
-      notify(`수거 요청 ${requestNumber}가 실제 DB에 저장되었습니다.`);
+      notify(
+        emailSent
+          ? `수거 요청 ${requestNumber} 저장 및 이메일 알림이 완료되었습니다.`
+          : `수거 요청 ${requestNumber}가 DB에 저장되었습니다. 이메일 알림은 확인이 필요합니다.`,
+      );
       await onCreated();
     } catch (caught) {
       if (photoPath) {

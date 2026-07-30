@@ -25,3 +25,5 @@ services:
         sync: false
       - key: RESEND_FROM_EMAIL
         sync: false
+      - key: RESEND_NOTIFICATION_TO
+        sync: false
