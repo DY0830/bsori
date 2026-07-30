@@ -1,5 +1,5 @@
-const CACHE_NAME = "bsori-shell-v1";
-const APP_SHELL = ["/", "/manifest.webmanifest", "/favicon.svg"];
+const CACHE_NAME = "bsori-shell-v2";
+const APP_SHELL = ["/manifest.webmanifest", "/favicon.svg"];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(caches.open(CACHE_NAME).then((cache) => cache.addAll(APP_SHELL)));
@@ -26,14 +26,25 @@ self.addEventListener("fetch", (event) => {
   if (!isStaticAsset && event.request.mode !== "navigate") return;
 
   event.respondWith(
-    fetch(event.request)
-      .then((response) => {
-        if (isStaticAsset) {
-          const copy = response.clone();
-          caches.open(CACHE_NAME).then((cache) => cache.put(event.request, copy));
+    (async () => {
+      try {
+        const response = await fetch(event.request);
+
+        if (isStaticAsset && response.ok) {
+          const cache = await caches.open(CACHE_NAME);
+          await cache.put(event.request, response.clone());
         }
+
         return response;
-      })
-      .catch(() => caches.match(event.request).then((response) => response || caches.match("/"))),
+      } catch {
+        const cached = await caches.match(event.request);
+        if (cached) return cached;
+
+        return new Response("네트워크 연결을 확인해 주세요.", {
+          status: 503,
+          headers: { "Content-Type": "text/plain; charset=utf-8" },
+        });
+      }
+    })(),
   );
 });
