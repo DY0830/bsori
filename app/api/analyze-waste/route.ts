@@ -35,6 +35,7 @@ const responseSchema = {
 
 export async function POST(request: Request) {
   const geminiApiKey = process.env.GEMINI_API_KEY;
+  const geminiModel = process.env.GEMINI_MODEL ?? "gemini-flash-latest";
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
   const authorization = request.headers.get("authorization");
@@ -108,7 +109,7 @@ export async function POST(request: Request) {
   }
 
   const geminiResponse = await fetch(
-    "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent",
+    `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(geminiModel)}:generateContent`,
     {
       method: "POST",
       headers: {

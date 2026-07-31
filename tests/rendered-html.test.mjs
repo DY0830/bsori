@@ -56,7 +56,8 @@ test("핵심 실서비스 기능과 보안 경계를 유지한다", async () => 
   assert.match(page, /WORKSPACE SWITCHER/);
   assert.match(weather, /api\.open-meteo\.com\/v1\/forecast/);
   assert.match(weather, /supabase\.auth\.getUser/);
-  assert.match(analysis, /gemini-2\.5-flash-lite:generateContent/);
+  assert.match(analysis, /GEMINI_MODEL/);
+  assert.match(analysis, /gemini-flash-latest/);
   assert.match(analysis, /supabase\.auth\.getUser/);
   assert.match(integrationStatus, /RESEND_NOTIFICATION_TO/);
   assert.doesNotMatch(integrationStatus, /value|apiKey|secret/i);

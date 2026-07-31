@@ -214,7 +214,23 @@ type KakaoMapsApi = {
     map: KakaoMap;
     position: KakaoLatLng;
     title?: string;
-  }) => unknown;
+  }) => KakaoMarker;
+  InfoWindow: new (options: {
+    content: string;
+    removable?: boolean;
+  }) => {
+    open: (map: KakaoMap, marker: KakaoMarker) => void;
+    close: () => void;
+  };
+  ZoomControl: new () => object;
+  ControlPosition: { RIGHT: object };
+  event: {
+    addListener: (
+      target: KakaoMarker,
+      eventName: "click",
+      listener: () => void,
+    ) => void;
+  };
   Polyline: new (options: {
     map: KakaoMap;
     path: KakaoLatLng[];
@@ -226,9 +242,11 @@ type KakaoMapsApi = {
 };
 
 type KakaoLatLng = object;
+type KakaoMarker = object;
 type KakaoMap = {
   setBounds: (bounds: object, padding?: number) => void;
   setZoomable: (zoomable: boolean) => void;
+  addControl: (control: object, position: object) => void;
 };
 
 declare global {
@@ -2999,9 +3017,24 @@ function DischargerWorkspace({
 
 const resourceFacility = {
   name: "B.SORI 자원화센터",
+  address: "부산광역시 영도구 해양로 일대",
   longitude: 129.0445,
   latitude: 35.0878,
 };
+
+function escapeMapHtml(value: string) {
+  return value.replace(
+    /[&<>"']/g,
+    (character) =>
+      ({
+        "&": "&amp;",
+        "<": "&lt;",
+        ">": "&gt;",
+        '"': "&quot;",
+        "'": "&#039;",
+      })[character] ?? character,
+  );
+}
 
 function optimizeRouteStops(
   stops: Array<Coordinate & { name: string }>,
@@ -3294,7 +3327,11 @@ function LegacyKakaoRouteMap({
   );
 }
 
-type RouteLocation = Coordinate & { name: string };
+type RouteLocation = Coordinate & {
+  name: string;
+  address?: string;
+  order?: number;
+};
 type RouteAddressCandidate = RouteLocation & { address: string };
 type EditableWaypoint = {
   id: string;
@@ -3426,11 +3463,16 @@ function RouteAddressPicker({
 function KakaoRouteMap({
   supabase,
   stops = [],
+  liveNavigation = false,
+  preserveStopOrder = false,
 }: {
   supabase: SupabaseClient;
   stops?: RouteLocation[];
+  liveNavigation?: boolean;
+  preserveStopOrder?: boolean;
 }) {
   const mapContainer = useRef<HTMLDivElement>(null);
+  const lastRoutedPosition = useRef<Coordinate | null>(null);
   const [originQuery, setOriginQuery] = useState("B.SORI 자원화센터");
   const [destinationQuery, setDestinationQuery] = useState("B.SORI 자원화센터");
   const [originLocation, setOriginLocation] = useState<RouteLocation | null>(resourceFacility);
@@ -3451,13 +3493,63 @@ function KakaoRouteMap({
     path: Coordinate[];
   } | null>(null);
   const [mapError, setMapError] = useState("");
+  const [currentLocation, setCurrentLocation] = useState<RouteLocation | null>(null);
+  const [locationStatus, setLocationStatus] = useState("");
+
+  useEffect(() => {
+    if (!liveNavigation) {
+      lastRoutedPosition.current = null;
+      return;
+    }
+    if (!("geolocation" in navigator)) {
+      return;
+    }
+
+    const watchId = navigator.geolocation.watchPosition(
+      (position) => {
+        const next: RouteLocation = {
+          name: "내 현재 위치",
+          address: "GPS 실시간 위치",
+          latitude: position.coords.latitude,
+          longitude: position.coords.longitude,
+        };
+        const previous = lastRoutedPosition.current;
+        const movedEnough =
+          !previous ||
+          Math.abs(previous.latitude - next.latitude) > 0.00035 ||
+          Math.abs(previous.longitude - next.longitude) > 0.00035;
+        if (movedEnough) {
+          lastRoutedPosition.current = next;
+          setCurrentLocation(next);
+        }
+        setLocationStatus(
+          `현재 위치 연결 · 정확도 약 ${Math.round(position.coords.accuracy)}m`,
+        );
+      },
+      (error) => {
+        setLocationStatus(
+          error.code === error.PERMISSION_DENIED
+            ? "현재 위치 권한을 허용하면 실시간 경로가 표시됩니다."
+            : "현재 위치를 확인하지 못해 지정 출발지를 사용합니다.",
+        );
+      },
+      { enableHighAccuracy: true, maximumAge: 10_000, timeout: 15_000 },
+    );
+
+    return () => navigator.geolocation.clearWatch(watchId);
+  }, [liveNavigation]);
+
+  const effectiveOrigin =
+    liveNavigation && currentLocation ? currentLocation : routePlan.origin;
 
   const activeWaypoints = useMemo(
     () =>
       customPlanApplied
         ? routePlan.waypoints
-        : optimizeRouteStops(stops, routePlan.origin).slice(0, 5),
-    [customPlanApplied, routePlan, stops],
+        : preserveStopOrder
+          ? stops.slice(0, 5)
+          : optimizeRouteStops(stops, effectiveOrigin).slice(0, 5),
+    [customPlanApplied, effectiveOrigin, preserveStopOrder, routePlan.waypoints, stops],
   );
 
   const resolveAddress = async (
@@ -3578,8 +3670,8 @@ function KakaoRouteMap({
   };
 
   const routeRequestKey = useMemo(
-    () => JSON.stringify([routePlan.origin, ...activeWaypoints, routePlan.destination]),
-    [activeWaypoints, routePlan.destination, routePlan.origin],
+    () => JSON.stringify([effectiveOrigin, ...activeWaypoints, routePlan.destination]),
+    [activeWaypoints, effectiveOrigin, routePlan.destination],
   );
 
   useEffect(() => {
@@ -3599,7 +3691,7 @@ function KakaoRouteMap({
             Authorization: `Bearer ${session.access_token}`,
           },
           body: JSON.stringify({
-            origin: routePlan.origin,
+            origin: effectiveOrigin,
             destination: routePlan.destination,
             waypoints: activeWaypoints,
           }),
@@ -3620,15 +3712,33 @@ function KakaoRouteMap({
         if (cancelled || !mapContainer.current) return;
         mapContainer.current.replaceChildren();
         const map = new maps.Map(mapContainer.current, {
-          center: new maps.LatLng(routePlan.origin.latitude, routePlan.origin.longitude),
+          center: new maps.LatLng(effectiveOrigin.latitude, effectiveOrigin.longitude),
           level: 7,
         });
-        map.setZoomable(false);
+        map.setZoomable(true);
+        map.addControl(new maps.ZoomControl(), maps.ControlPosition.RIGHT);
         const bounds = new maps.LatLngBounds();
-        [routePlan.origin, ...activeWaypoints, routePlan.destination].forEach((stop) => {
+        let openedInfoWindow: { close: () => void } | null = null;
+        [effectiveOrigin, ...activeWaypoints, routePlan.destination].forEach((stop, index) => {
           const position = new maps.LatLng(stop.latitude, stop.longitude);
           bounds.extend(position);
-          new maps.Marker({ map, position, title: stop.name });
+          const marker = new maps.Marker({ map, position, title: stop.name });
+          const isOrigin = index === 0;
+          const isDestination = index === activeWaypoints.length + 1;
+          const orderLabel = isOrigin
+            ? "출발"
+            : isDestination
+              ? "도착"
+              : `${index}번째 수거`;
+          const infoWindow = new maps.InfoWindow({
+            removable: true,
+            content: `<div class="bsori-map-info"><strong>${orderLabel} · ${escapeMapHtml(stop.name)}</strong><span>${escapeMapHtml(stop.address ?? stop.name)}</span></div>`,
+          });
+          maps.event.addListener(marker, "click", () => {
+            openedInfoWindow?.close();
+            infoWindow.open(map, marker);
+            openedInfoWindow = infoWindow;
+          });
         });
         if (payload.route.path.length > 0) {
           new maps.Polyline({
@@ -3656,7 +3766,7 @@ function KakaoRouteMap({
     return () => {
       cancelled = true;
     };
-  }, [routeRequestKey, supabase]);
+  }, [activeWaypoints, effectiveOrigin, routePlan.destination, routeRequestKey, supabase]);
 
   const durationMinutes = route
     ? Math.max(1, Math.round(route.durationSeconds / 60))
@@ -3670,6 +3780,24 @@ function KakaoRouteMap({
 
   return (
     <>
+      {liveNavigation && (
+        <div className="live-navigation-panel" aria-live="polite">
+          <div>
+            <span className={`live-location-dot ${currentLocation ? "connected" : ""}`} />
+            <strong>{currentLocation ? "실시간 운행 경로" : "위치 연결 대기"}</strong>
+            <small>{locationStatus || "현재 위치 확인 중"}</small>
+          </div>
+          <ol>
+            <li>내 위치</li>
+            {activeWaypoints.map((stop, index) => (
+              <li key={`${stop.longitude}-${stop.latitude}-${index}`}>
+                {index + 1}. {stop.name}
+              </li>
+            ))}
+            <li>자원화센터</li>
+          </ol>
+        </div>
+      )}
       <section className="route-planner" aria-label="수거 경로 편집기">
         <RouteAddressPicker
           label="출발지"
@@ -4267,17 +4395,21 @@ function LiveDriverWorkspace({
     () =>
       assignments.flatMap((assignment) => {
         const request = firstRelation(assignment.waste_requests);
+        const taskStatus = getTaskStatus(assignment);
         if (
           !request ||
           request.latitude === null ||
           request.longitude === null ||
-          getTaskStatus(assignment) === "수거 완료"
+          taskStatus === "수거 완료" ||
+          taskStatus === "도착"
         ) {
           return [];
         }
         return [
           {
             name: getOrganizationName(request.organizations),
+            address: request.pickup_address,
+            order: assignment.route_order ?? undefined,
             latitude: Number(request.latitude),
             longitude: Number(request.longitude),
           },
@@ -4288,6 +4420,9 @@ function LiveDriverWorkspace({
 
   const activeAssignments = assignments.filter(
     (assignment) => getTaskStatus(assignment) !== "수거 완료",
+  );
+  const navigationActive = assignments.some(
+    (assignment) => getTaskStatus(assignment) === "이동 중",
   );
   const expectedWeight = activeAssignments.reduce((sum, assignment) => {
     const request = firstRelation(assignment.waste_requests);
@@ -4381,7 +4516,12 @@ function LiveDriverWorkspace({
             </div>
             <span className="route-saving">실시간 DB</span>
           </div>
-          <KakaoRouteMap supabase={supabase} stops={taskStops} />
+          <KakaoRouteMap
+            supabase={supabase}
+            stops={taskStops}
+            liveNavigation={navigationActive}
+            preserveStopOrder
+          />
         </article>
 
         <article className="task-stack">
