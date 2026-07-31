@@ -68,10 +68,7 @@ type DriverAssignment = {
   arrived_at: string | null;
   collected_at: string | null;
   actual_weight_kg: number | null;
-  vehicles:
-    | { plate_number: string }
-    | { plate_number: string }[]
-    | null;
+  vehicles: { plate_number: string } | { plate_number: string }[] | null;
   waste_requests:
     | {
         id: string;
@@ -109,18 +106,12 @@ type FacilityWorkItem = {
     | {
         actual_weight_kg: number | null;
         collected_at: string | null;
-        vehicles:
-          | { plate_number: string }
-          | { plate_number: string }[]
-          | null;
+        vehicles: { plate_number: string } | { plate_number: string }[] | null;
       }
     | {
         actual_weight_kg: number | null;
         collected_at: string | null;
-        vehicles:
-          | { plate_number: string }
-          | { plate_number: string }[]
-          | null;
+        vehicles: { plate_number: string } | { plate_number: string }[] | null;
       }[]
     | null;
   facility_receipts:
@@ -319,15 +310,45 @@ const adminNavigation: {
   { id: "integrations", label: "계정·연동", eyebrow: "설정", icon: "⋯" },
 ];
 
-const roleNavigation: Record<Exclude<UserRole, "admin">, (typeof adminNavigation)> = {
+const accountNavigationItem = {
+  id: "integrations" as Workspace,
+  label: "계정·연동",
+  eyebrow: "역할 전환",
+  icon: "⋯",
+};
+
+const roleNavigation: Record<
+  Exclude<UserRole, "admin">,
+  typeof adminNavigation
+> = {
   discharger: [
-    { id: "discharger", label: "부산물 등록", eyebrow: "배출업체", icon: "+" },
+    {
+      id: "discharger",
+      label: "부산물 등록",
+      eyebrow: "배출업체",
+      icon: "+",
+    },
+    accountNavigationItem,
   ],
+
   driver: [
-    { id: "driver", label: "수거 운행", eyebrow: "수거기사", icon: "↗" },
+    {
+      id: "driver",
+      label: "수거 운행",
+      eyebrow: "수거기사",
+      icon: "↗",
+    },
+    accountNavigationItem,
   ],
+
   facility: [
-    { id: "facility", label: "반입·처리", eyebrow: "자원화시설", icon: "□" },
+    {
+      id: "facility",
+      label: "반입·처리",
+      eyebrow: "자원화시설",
+      icon: "□",
+    },
+    accountNavigationItem,
   ],
 };
 
@@ -346,7 +367,7 @@ const statusTone: Record<string, string> = {
 
 const supabaseConfigured = Boolean(
   process.env.NEXT_PUBLIC_SUPABASE_URL &&
-    process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY,
+  process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY,
 );
 const integrations = [
   {
@@ -430,6 +451,52 @@ const roleLabel: Record<UserRole, string> = {
   admin: "관리자",
 };
 
+const roleWorkspace: Record<UserRole, Workspace> = {
+  admin: "overview",
+  discharger: "discharger",
+  driver: "driver",
+  facility: "facility",
+};
+
+const selectableRoles: UserRole[] = [
+  "admin",
+  "discharger",
+  "driver",
+  "facility",
+];
+
+const roleOptions: Array<{
+  role: UserRole;
+  title: string;
+  detail: string;
+  mark: string;
+}> = [
+  {
+    role: "admin",
+    title: "통합관리자",
+    detail: "전체 현황·배차·AI 예측·에너지 운영",
+    mark: "A",
+  },
+  {
+    role: "discharger",
+    title: "배출업체",
+    detail: "부산물 사진 분석·수거 요청 등록",
+    mark: "D",
+  },
+  {
+    role: "driver",
+    title: "수거기사",
+    detail: "배정 업무·수거 경로·수거 결과 입력",
+    mark: "C",
+  },
+  {
+    role: "facility",
+    title: "자원화시설 관리자",
+    detail: "반입 검수·계량·처리 결과 기록",
+    mark: "F",
+  },
+];
+
 const requestStatusLabel: Record<string, string> = {
   requested: "접수 완료",
   assigned: "배차 완료",
@@ -462,9 +529,7 @@ function AuthPanel({
   supabase: SupabaseClient;
   onReady: (user: User) => Promise<void>;
 }) {
-  const [mode, setMode] = useState<"login" | "bootstrap" | "activate">(
-    "login",
-  );
+  const [mode, setMode] = useState<"login" | "bootstrap" | "activate">("login");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
@@ -637,8 +702,7 @@ function AuthPanel({
           {mode === "activate" && "초대 계정 활성화"}
         </h2>
         <p>
-          {mode === "login" &&
-            "관리자가 등록한 이메일 계정으로 로그인하세요."}
+          {mode === "login" && "관리자가 등록한 이메일 계정으로 로그인하세요."}
           {mode === "bootstrap" &&
             "최초 한 번만 운영본부 관리자 계정을 만들 수 있습니다."}
           {mode === "activate" &&
@@ -1191,9 +1255,13 @@ function AdminOverview({
   ).length;
   const biogasReadyKg = requests
     .filter((request) =>
-      ["collected", "in_transit", "received", "processing", "completed"].includes(
-        request.status,
-      ),
+      [
+        "collected",
+        "in_transit",
+        "received",
+        "processing",
+        "completed",
+      ].includes(request.status),
     )
     .reduce(
       (sum, request) => sum + Number(request.estimated_weight_kg || 0),
@@ -1508,9 +1576,7 @@ function AdminOperationsWorkspace({
                 <small>{getOrganizationName(request.organizations)}</small>
               </span>
               <span>{request.waste_type}</span>
-              <b>
-                {Number(request.estimated_weight_kg).toLocaleString()}kg
-              </b>
+              <b>{Number(request.estimated_weight_kg).toLocaleString()}kg</b>
               <StatusBadge
                 status={requestStatusLabel[request.status] ?? request.status}
               />
@@ -1546,8 +1612,7 @@ function AiForecastWorkspace({
   const logisticsTargets = [...requests]
     .filter((request) => request.status === "requested")
     .sort(
-      (a, b) =>
-        Number(b.estimated_weight_kg) - Number(a.estimated_weight_kg),
+      (a, b) => Number(b.estimated_weight_kg) - Number(a.estimated_weight_kg),
     )
     .slice(0, 4);
 
@@ -1674,9 +1739,7 @@ function AiForecastWorkspace({
                     {request.waste_type} · {request.request_number}
                   </small>
                 </p>
-                <b>
-                  {Number(request.estimated_weight_kg).toLocaleString()}kg
-                </b>
+                <b>{Number(request.estimated_weight_kg).toLocaleString()}kg</b>
               </div>
             ))}
             {logisticsTargets.length === 0 && (
@@ -1693,9 +1756,13 @@ function ResourceEnergyWorkspace({ requests }: { requests: DbWasteRequest[] }) {
   const feedstockTons =
     requests
       .filter((request) =>
-        ["collected", "in_transit", "received", "processing", "completed"].includes(
-          request.status,
-        ),
+        [
+          "collected",
+          "in_transit",
+          "received",
+          "processing",
+          "completed",
+        ].includes(request.status),
       )
       .reduce(
         (sum, request) => sum + Number(request.estimated_weight_kg || 0),
@@ -1711,8 +1778,8 @@ function ResourceEnergyWorkspace({ requests }: { requests: DbWasteRequest[] }) {
           <span className="page-kicker">BIOGAS & ESS CONTROL</span>
           <h1>자원화·에너지 운영</h1>
           <p>
-            수거된 수산 부산물을 혼합소화 원료로 배합하고 바이오가스와 ESS
-            운영 계획으로 연결합니다.
+            수거된 수산 부산물을 혼합소화 원료로 배합하고 바이오가스와 ESS 운영
+            계획으로 연결합니다.
           </p>
         </div>
         <span className="model-chip green">AI 제어 권고</span>
@@ -1865,11 +1932,11 @@ function DischargerWorkspace({
   const [analyzed, setAnalyzed] = useState(false);
   const [analysis, setAnalysis] = useState<WasteAnalysis | null>(null);
   const [analyzing, setAnalyzing] = useState(false);
-  const [pickupAddress, setPickupAddress] = useState(
-    "부산광역시 영도구 해양로 24",
+  const [pickupAddress, setPickupAddress] =
+    useState("부산광역시 영도구 해양로 24");
+  const [pickupCoordinate, setPickupCoordinate] = useState<Coordinate | null>(
+    null,
   );
-  const [pickupCoordinate, setPickupCoordinate] =
-    useState<Coordinate | null>(null);
   const [addressSearching, setAddressSearching] = useState(false);
   const [registered, setRegistered] = useState("");
   const [saving, setSaving] = useState(false);
@@ -2255,11 +2322,7 @@ function DischargerWorkspace({
             >
               임시 저장
             </button>
-            <button
-              type="submit"
-              className="primary-action"
-              disabled={saving}
-            >
+            <button type="submit" className="primary-action" disabled={saving}>
               {saving
                 ? "DB 저장 중..."
                 : registered
@@ -2967,9 +3030,13 @@ function LiveDriverWorkspace({
     const request = firstRelation(assignment.waste_requests);
     if (
       !request ||
-      ["collected", "in_transit", "received", "processing", "completed"].includes(
-        request.status,
-      )
+      [
+        "collected",
+        "in_transit",
+        "received",
+        "processing",
+        "completed",
+      ].includes(request.status)
     ) {
       return "수거 완료";
     }
@@ -3111,7 +3178,11 @@ function LiveDriverWorkspace({
             </div>
             <span>{assignments.length}건</span>
           </div>
-          {loading && <div className="surface request-empty">배차를 불러오는 중입니다.</div>}
+          {loading && (
+            <div className="surface request-empty">
+              배차를 불러오는 중입니다.
+            </div>
+          )}
           {!loading && assignments.length === 0 && (
             <div className="surface request-empty">
               관리자에게 배차된 수거 요청이 아직 없습니다.
@@ -3127,10 +3198,14 @@ function LiveDriverWorkspace({
                 className={`surface driver-task ${status === "이동 중" ? "active" : ""}`}
                 key={assignment.id}
               >
-                <div className="task-order">{assignment.route_order ?? "–"}</div>
+                <div className="task-order">
+                  {assignment.route_order ?? "–"}
+                </div>
                 <div className="task-copy">
                   <div>
-                    <strong>{getOrganizationName(request.organizations)}</strong>
+                    <strong>
+                      {getOrganizationName(request.organizations)}
+                    </strong>
                     <StatusBadge status={status} />
                   </div>
                   <p>{request.pickup_address}</p>
@@ -3177,9 +3252,7 @@ function LiveDriverWorkspace({
                   </div>
                 )}
                 <button
-                  disabled={
-                    status === "수거 완료" || busyId === assignment.id
-                  }
+                  disabled={status === "수거 완료" || busyId === assignment.id}
                   onClick={() => void advanceTask(assignment)}
                 >
                   {busyId === assignment.id && "저장 중…"}
@@ -3190,9 +3263,7 @@ function LiveDriverWorkspace({
                   {busyId !== assignment.id &&
                     status === "도착" &&
                     "수거 완료 저장"}
-                  {busyId !== assignment.id &&
-                    status === "수거 완료" &&
-                    "완료"}
+                  {busyId !== assignment.id && status === "수거 완료" && "완료"}
                 </button>
               </article>
             );
@@ -3250,7 +3321,7 @@ function LiveFacilityWorkspace({
     setSelectedId((current) =>
       nextItems.some((item) => item.id === current)
         ? current
-        : nextItems[0]?.id ?? "",
+        : (nextItems[0]?.id ?? ""),
     );
     setDailyWeightKg(
       (receiptResult.data ?? []).reduce(
@@ -3357,7 +3428,9 @@ function LiveFacilityWorkspace({
         <div>
           <span className="page-kicker">RESOURCE FACILITY · LIVE DB</span>
           <h1>반입·검수·처리</h1>
-          <p>수거 완료 데이터부터 계량과 자원화 결과까지 실제 DB에 기록합니다.</p>
+          <p>
+            수거 완료 데이터부터 계량과 자원화 결과까지 실제 DB에 기록합니다.
+          </p>
         </div>
         <div className="facility-live">
           <i />
@@ -3377,9 +3450,13 @@ function LiveFacilityWorkspace({
             </div>
             <span className="number-pill">{items.length}</span>
           </div>
-          {loading && <div className="request-empty">입고 정보를 불러오는 중입니다.</div>}
+          {loading && (
+            <div className="request-empty">입고 정보를 불러오는 중입니다.</div>
+          )}
           {!loading && items.length === 0 && (
-            <div className="request-empty">수거 완료된 입고 예정 건이 없습니다.</div>
+            <div className="request-empty">
+              수거 완료된 입고 예정 건이 없습니다.
+            </div>
           )}
           {items.map((item) => {
             const itemAssignment = firstRelation(item.collection_assignments);
@@ -3414,7 +3491,7 @@ function LiveFacilityWorkspace({
                   <small>
                     {item.status === "processing"
                       ? "처리 중"
-                      : itemVehicle?.plate_number ?? "차량 정보 없음"}
+                      : (itemVehicle?.plate_number ?? "차량 정보 없음")}
                   </small>
                 </div>
                 <b>›</b>
@@ -3424,7 +3501,10 @@ function LiveFacilityWorkspace({
         </article>
 
         {current ? (
-          <form className="surface inspection-card" onSubmit={submitFacilityResult}>
+          <form
+            className="surface inspection-card"
+            onSubmit={submitFacilityResult}
+          >
             <div className="surface-heading">
               <div>
                 <span className="section-kicker">
@@ -3462,9 +3542,9 @@ function LiveFacilityWorkspace({
                   step="0.01"
                   defaultValue={
                     isProcessing
-                      ? processing?.output_weight_kg ?? ""
-                      : assignment?.actual_weight_kg ??
-                        current.estimated_weight_kg
+                      ? (processing?.output_weight_kg ?? "")
+                      : (assignment?.actual_weight_kg ??
+                        current.estimated_weight_kg)
                   }
                   required
                 />
@@ -3595,7 +3675,9 @@ function LiveFacilityWorkspace({
             <span>
               <i className="type-two" />
               처리 중{" "}
-              <b>{items.filter((item) => item.status === "processing").length}건</b>
+              <b>
+                {items.filter((item) => item.status === "processing").length}건
+              </b>
             </span>
           </div>
         </article>
@@ -3608,27 +3690,82 @@ function IntegrationsWorkspace({
   notify,
   supabase,
   profile,
+  activeRole,
+  onRoleChange,
 }: {
   notify: (message: string) => void;
   supabase: SupabaseClient;
   profile: Profile;
+  activeRole: UserRole;
+  onRoleChange: (role: UserRole) => void;
 }) {
+  const canSwitchAllRoles = profile.role === "admin";
+
   return (
     <div className="page-stack">
       <section className="workspace-title integration-title">
         <div>
-          <span className="page-kicker">SERVICE PIPELINE</span>
-          <h1>API · 데이터베이스 연동</h1>
+          <span className="page-kicker">ACCOUNT & SERVICE CONNECTION</span>
+          <h1>계정 연동 설정</h1>
           <p>
-            각 서비스의 키와 Supabase 프로젝트를 연결하면 데모 데이터가 실제
-            데이터로 전환됩니다.
+            한 번 로그인한 뒤 필요한 업무 화면을 선택하세요. 다시 로그인할
+            필요 없이 즉시 이동합니다.
           </p>
         </div>
-        <span className="demo-mode">
+        <span className="demo-mode connected-mode">
           <i />
-          현재 데모 모드
+          통합 계정 연결됨
         </span>
       </section>
+
+      <section className="surface linked-account-panel">
+        <div className="surface-heading">
+          <div>
+            <span className="section-kicker">WORKSPACE SWITCHER</span>
+            <h2>사용할 업무 화면 선택</h2>
+            <p>
+              로그인 계정과 데이터 접근 권한은 그대로 유지되고 화면만
+              전환됩니다.
+            </p>
+          </div>
+          <span className="linked-account-name">
+            {profile.full_name} · {roleLabel[profile.role]}
+          </span>
+        </div>
+        <div className="linked-role-grid">
+          {roleOptions.map((option) => {
+            const available =
+              canSwitchAllRoles || option.role === profile.role;
+            const active = option.role === activeRole;
+
+            return (
+              <button
+                key={option.role}
+                className={active ? "active" : ""}
+                disabled={!available}
+                onClick={() => onRoleChange(option.role)}
+              >
+                <span>{option.mark}</span>
+                <div>
+                  <strong>{option.title}</strong>
+                  <small>{option.detail}</small>
+                </div>
+                <b>{active ? "사용 중" : available ? "이동" : "권한 없음"}</b>
+              </button>
+            );
+          })}
+        </div>
+        <p className="linked-role-note">
+          {canSwitchAllRoles
+            ? "통합관리자 계정은 네 가지 업무 화면을 모두 사용할 수 있습니다."
+            : "일반 계정은 담당 업무 화면만 사용할 수 있으며, 추가 권한은 통합관리자가 연결합니다."}
+        </p>
+      </section>
+
+      <div className="integration-section-heading">
+        <span className="section-kicker">EXTERNAL SERVICES</span>
+        <h2>API · 데이터베이스 연결 상태</h2>
+      </div>
       <section className="integration-grid">
         {integrations.map((integration) => (
           <article className="surface integration-card" key={integration.name}>
@@ -3699,6 +3836,7 @@ export default function Home() {
   const [toast, setToast] = useState("");
   const [user, setUser] = useState<User | null>(null);
   const [profile, setProfile] = useState<Profile | null>(null);
+  const [activeRole, setActiveRole] = useState<UserRole>("admin");
   const [authLoading, setAuthLoading] = useState(true);
   const [requests, setRequests] = useState<DbWasteRequest[]>([]);
   const [weather, setWeather] = useState<WeatherForecast | null>(null);
@@ -3718,10 +3856,8 @@ export default function Home() {
       let { data, error } = await fetchProfile();
 
       if (!data && !error) {
-        const inviteToken =
-          window.localStorage.getItem("bsori-invite-token");
-        const bootstrapRaw =
-          window.localStorage.getItem("bsori-bootstrap");
+        const inviteToken = window.localStorage.getItem("bsori-invite-token");
+        const bootstrapRaw = window.localStorage.getItem("bsori-bootstrap");
 
         if (inviteToken) {
           const { error: invitationError } = await supabase.rpc(
@@ -3759,14 +3895,21 @@ export default function Home() {
 
       const nextProfile = (data as Profile | null) ?? null;
       setProfile(nextProfile);
-      if (nextProfile && nextProfile.role !== "admin") {
-        setWorkspace(
-          nextProfile.role === "discharger"
-            ? "discharger"
-            : nextProfile.role === "driver"
-              ? "driver"
-              : "facility",
-        );
+
+      if (nextProfile) {
+        const savedRole = window.localStorage.getItem(
+          "bsori-active-role",
+        ) as UserRole | null;
+
+        const initialRole =
+          nextProfile.role === "admin" &&
+          savedRole &&
+          selectableRoles.includes(savedRole)
+            ? savedRole
+            : nextProfile.role;
+
+        setActiveRole(initialRole);
+        setWorkspace(roleWorkspace[initialRole]);
       }
     },
     [supabase],
@@ -3790,7 +3933,7 @@ export default function Home() {
   }, [supabase]);
 
   const loadWeather = useCallback(async () => {
-    if (!profile || !["admin", "driver"].includes(profile.role)) {
+    if (!profile || !["admin", "driver"].includes(activeRole)) {
       setWeather(null);
       return;
     }
@@ -3821,7 +3964,7 @@ export default function Home() {
     } finally {
       setWeatherLoading(false);
     }
-  }, [profile, supabase]);
+  }, [profile, activeRole, supabase]);
 
   useEffect(() => {
     void loadWeather();
@@ -3892,9 +4035,12 @@ export default function Home() {
   }, []);
 
   const visibleNavigation = useMemo(() => {
-    if (!profile || profile.role === "admin") return adminNavigation;
-    return roleNavigation[profile.role as Exclude<UserRole, "admin">];
-  }, [profile]);
+    if (activeRole === "admin") {
+      return adminNavigation;
+    }
+
+    return roleNavigation[activeRole as Exclude<UserRole, "admin">];
+  }, [activeRole]);
 
   const current = useMemo(
     () =>
@@ -3903,6 +4049,19 @@ export default function Home() {
       adminNavigation[0],
     [visibleNavigation, workspace],
   );
+  const changeActiveRole = (nextRole: UserRole) => {
+    if (profile?.role !== "admin" && nextRole !== profile?.role) {
+      notify("이 계정에는 해당 업무 화면 권한이 없습니다.");
+      return;
+    }
+
+    setActiveRole(nextRole);
+    setWorkspace(roleWorkspace[nextRole]);
+
+    window.localStorage.setItem("bsori-active-role", nextRole);
+
+    notify(`${roleLabel[nextRole]} 화면으로 전환했습니다.`);
+  };
 
   const notify = (message: string) => {
     setToast(message);
@@ -3972,11 +4131,9 @@ export default function Home() {
               <small>Realtime 구독 중</small>
             </div>
           </div>
-          {profile.role === "admin" && (
-            <button onClick={() => setWorkspace("integrations")}>
-              계정·연동 설정
-            </button>
-          )}
+          <button onClick={() => setWorkspace("integrations")}>
+            계정·연동 설정
+          </button>
         </div>
       </aside>
 
@@ -3993,10 +4150,34 @@ export default function Home() {
           </div>
           <div className="top-actions">
             <span className="demo-chip live">LIVE</span>
+            {profile.role === "admin" ? (
+              <div className="role-switcher">
+                <span>현재 화면</span>
+                <select
+                  aria-label="업무 화면 전환"
+                  value={activeRole}
+                  onChange={(event) =>
+                    changeActiveRole(event.target.value as UserRole)
+                  }
+                >
+                  {selectableRoles.map((role) => (
+                    <option key={role} value={role}>
+                      {roleLabel[role]}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            ) : (
+              <span className="single-role-chip">
+                {roleLabel[profile.role]} 화면
+              </span>
+            )}
             <button
               className="top-icon"
               aria-label="검색"
-              onClick={() => notify(`${requests.length}건의 요청이 검색됩니다.`)}
+              onClick={() =>
+                notify(`${requests.length}건의 요청이 검색됩니다.`)
+              }
             >
               ⌕
             </button>
@@ -4012,8 +4193,8 @@ export default function Home() {
               <div>
                 <strong>{profile.full_name}</strong>
                 <small>
-                  {getOrganizationName(profile.organizations)} ·{" "}
-                  {roleLabel[profile.role]}
+                  {getOrganizationName(profile.organizations)} · 현재{" "}
+                  {roleLabel[activeRole]} 화면
                 </small>
               </div>
             </div>
@@ -4061,6 +4242,7 @@ export default function Home() {
               onCreated={loadRequests}
             />
           )}
+
           {workspace === "driver" && (
             <LiveDriverWorkspace
               notify={notify}
@@ -4070,6 +4252,7 @@ export default function Home() {
               weatherLoading={weatherLoading}
             />
           )}
+
           {workspace === "facility" && (
             <LiveFacilityWorkspace
               notify={notify}
@@ -4077,11 +4260,14 @@ export default function Home() {
               profile={profile}
             />
           )}
+
           {workspace === "integrations" && (
             <IntegrationsWorkspace
               notify={notify}
               supabase={supabase}
               profile={profile}
+              activeRole={activeRole}
+              onRoleChange={changeActiveRole}
             />
           )}
         </div>
