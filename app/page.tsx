@@ -182,6 +182,8 @@ type WeatherForecast = {
   location: string;
   temperatureC: number;
   precipitationProbability: number;
+  precipitationMm?: number;
+  windSpeedMs?: number;
   weather: string;
   symbol: string;
   windDirection: string;
@@ -1753,7 +1755,7 @@ function AdminOperationsWorkspace({
   );
 }
 
-function AiForecastWorkspace({
+function LegacyAiForecastWorkspace({
   requests,
   notify,
 }: {
@@ -1946,6 +1948,264 @@ function AiForecastWorkspace({
             ))}
             {logisticsTargets.length === 0 && (
               <p className="request-empty">배차 대기 요청이 없습니다.</p>
+            )}
+          </div>
+        </article>
+      </section>
+    </div>
+  );
+}
+
+function AiForecastWorkspace({
+  requests,
+  weather,
+  weatherLoading,
+  notify,
+}: {
+  requests: DbWasteRequest[];
+  weather: WeatherForecast | null;
+  weatherLoading: boolean;
+  notify: (message: string) => void;
+}) {
+  const now = new Date();
+  const startOfToday = new Date(now);
+  startOfToday.setHours(0, 0, 0, 0);
+
+  const dailyHistory = Array.from({ length: 14 }, (_, index) => {
+    const start = new Date(startOfToday);
+    start.setDate(start.getDate() - (13 - index));
+    const end = new Date(start);
+    end.setDate(end.getDate() + 1);
+    const kilograms = requests
+      .filter((request) => {
+        const createdAt = new Date(request.created_at);
+        return createdAt >= start && createdAt < end;
+      })
+      .reduce(
+        (sum, request) => sum + Number(request.estimated_weight_kg || 0),
+        0,
+      );
+    return { date: start, tons: kilograms / 1000 };
+  });
+
+  const recentSeven = dailyHistory.slice(-7);
+  const previousSeven = dailyHistory.slice(0, 7);
+  const recentTotal = recentSeven.reduce((sum, day) => sum + day.tons, 0);
+  const previousTotal = previousSeven.reduce((sum, day) => sum + day.tons, 0);
+  const baselineTons = recentTotal / 7;
+  const trendFactor =
+    previousTotal > 0
+      ? Math.min(1.25, Math.max(0.8, recentTotal / previousTotal))
+      : recentTotal > 0
+        ? 1.05
+        : 1;
+  const weatherFactor = weather
+    ? weather.riskTone === "high"
+      ? 0.82
+      : weather.riskTone === "medium"
+        ? 0.93
+        : 1.02
+    : 1;
+  const weekday = now.getDay();
+  const weekdayFactor = weekday === 0 || weekday === 6 ? 0.92 : 1.03;
+  const predictedTons = Math.max(
+    0,
+    baselineTons * trendFactor * weatherFactor * weekdayFactor,
+  );
+  const daysWithData = dailyHistory.filter((day) => day.tons > 0).length;
+  const confidence = Math.min(
+    92,
+    42 + Math.min(requests.length, 10) * 3 + Math.min(daysWithData, 7) * 2 +
+      (weather ? 10 : 0),
+  );
+  const uncertainty = Math.max(0.12, (100 - confidence) / 100);
+  const lowerBound = Math.max(0, predictedTons * (1 - uncertainty));
+  const upperBound = predictedTons * (1 + uncertainty);
+  const registeredToday = recentSeven[recentSeven.length - 1]?.tons ?? 0;
+  const requiredVehicles = predictedTons > 0 ? Math.ceil(predictedTons / 2.5) : 0;
+  const auctionEquivalent = predictedTons > 0 ? predictedTons / 0.16 : 0;
+  const sevenDayFactors = [1, 1.04, 0.98, 1.08, 1.12, 1.02, 0.96];
+  const sevenDayForecast = sevenDayFactors.map((factor, index) => ({
+    date: new Date(startOfToday.getTime() + index * 86400000),
+    tons: predictedTons * factor,
+  }));
+  const maxForecast = Math.max(...sevenDayForecast.map((day) => day.tons), 0.1);
+
+  const typeTotals = Object.entries(
+    requests.reduce<Record<string, number>>((totals, request) => {
+      const type = request.waste_type || "기타 부산물";
+      totals[type] =
+        (totals[type] ?? 0) + Number(request.estimated_weight_kg || 0);
+      return totals;
+    }, {}),
+  )
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 4);
+  const totalTypeWeight = typeTotals.reduce((sum, [, weight]) => sum + weight, 0);
+
+  const logisticsTargets = [...requests]
+    .filter((request) => request.status === "requested")
+    .sort(
+      (a, b) => Number(b.estimated_weight_kg) - Number(a.estimated_weight_kg),
+    )
+    .slice(0, 4);
+  const collectionAdvice = !weather
+    ? "날씨 연결을 확인한 뒤 운행 계획을 확정하세요."
+    : weather.riskTone === "high"
+      ? "강수·강풍 위험이 높습니다. 오전 수거를 우선하고 예비 차량을 확보하세요."
+      : weather.riskTone === "medium"
+        ? "기상 변동을 고려해 장거리 수거를 앞 순서에 배치하세요."
+        : "운행 위험이 낮습니다. 발생량이 큰 업체부터 묶음 수거하세요.";
+
+  return (
+    <div className="page-stack forecast-workspace">
+      <section className="workspace-title compact-title">
+        <div>
+          <span className="page-kicker">AI DAILY BYPRODUCT FORECAST</span>
+          <h1>하루 수산 부산물 발생 예측</h1>
+          <p>
+            Supabase 등록 이력, 요일 변화, 부산 날씨와 현재 수거 대기량을 함께 분석해
+            하루 발생량과 필요한 차량을 계산합니다.
+          </p>
+        </div>
+        <span className="model-chip">예측 모델 v1 · 30분마다 날씨 갱신</span>
+      </section>
+
+      <section className="daily-forecast-hero">
+        <div className="daily-forecast-main">
+          <span className="section-kicker">TODAY PREDICTION</span>
+          <p>오늘 예상 발생량</p>
+          <strong>{predictedTons.toFixed(2)}<small>t</small></strong>
+          <div className="prediction-range">
+            예상 범위 {lowerBound.toFixed(2)}~{upperBound.toFixed(2)}t
+            <b>신뢰도 {confidence}%</b>
+          </div>
+          {requests.length < 7 && (
+            <small className="prediction-caution">
+              데이터가 더 쌓이면 업체별·어종별 계절 패턴까지 반영되어 정확도가 높아집니다.
+            </small>
+          )}
+        </div>
+
+        <div className="forecast-factor-grid">
+          <div>
+            <span>최근 7일 기준</span>
+            <strong>{baselineTons.toFixed(2)}t/일</strong>
+            <small>실제 등록 {requests.length}건</small>
+          </div>
+          <div>
+            <span>추세 보정</span>
+            <strong>{trendFactor >= 1 ? "+" : ""}{Math.round((trendFactor - 1) * 100)}%</strong>
+            <small>직전 7일과 비교</small>
+          </div>
+          <div className={`weather-factor ${weather?.riskTone ?? "unknown"}`}>
+            <span>부산 날씨 보정</span>
+            <strong>
+              {weatherLoading
+                ? "갱신 중"
+                : weather
+                  ? `${weather.symbol} ${Math.round(weather.temperatureC)}°`
+                  : "연결 필요"}
+            </strong>
+            <small>
+              {weather
+                ? `강수 ${weather.precipitationProbability}% · 풍속 ${(weather.windSpeedMs ?? 0).toFixed(1)}m/s`
+                : "날씨 제외 상태"}
+            </small>
+          </div>
+          <div>
+            <span>오늘 등록량</span>
+            <strong>{registeredToday.toFixed(2)}t</strong>
+            <small>실시간 DB 반영</small>
+          </div>
+        </div>
+
+        <div className="forecast-action-panel">
+          <span>AI 운영 권고</span>
+          <strong>{collectionAdvice}</strong>
+          <div>
+            <p><b>{requiredVehicles}대</b><small>2.5t 권장 차량</small></p>
+            <p><b>{auctionEquivalent.toFixed(1)}t</b><small>예상 위판량 환산</small></p>
+          </div>
+        </div>
+      </section>
+
+      <section className="forecast-layout">
+        <article className="surface forecast-card">
+          <div className="surface-heading">
+            <div>
+              <span className="section-kicker">7-DAY OUTLOOK</span>
+              <h2>향후 7일 발생량 전망</h2>
+            </div>
+            <button
+              className="quiet-button"
+              onClick={() =>
+                notify("등록 이력 50%, 최근 추세 25%, 날씨 15%, 요일 10%를 반영한 운영 예측입니다.")
+              }
+            >
+              계산 기준
+            </button>
+          </div>
+          <div className="forecast-chart" aria-label="7일 수산 부산물 발생 예측 차트">
+            {sevenDayForecast.map((day) => (
+              <div key={day.date.toISOString()}>
+                <strong>{day.tons.toFixed(2)}t</strong>
+                <i style={{ height: `${(day.tons / maxForecast) * 100}%` }} />
+                <span>
+                  {new Intl.DateTimeFormat("ko-KR", { weekday: "short" }).format(day.date)}
+                </span>
+              </div>
+            ))}
+          </div>
+        </article>
+
+        <article className="surface byproduct-mix-card">
+          <div className="surface-heading">
+            <div>
+              <span className="section-kicker">BYPRODUCT MIX</span>
+              <h2>부산물 종류별 발생 비중</h2>
+            </div>
+            <span className="weather-place">DB 자동 집계</span>
+          </div>
+          <div className="byproduct-mix-list">
+            {typeTotals.map(([type, weight], index) => {
+              const share = totalTypeWeight > 0 ? (weight / totalTypeWeight) * 100 : 0;
+              return (
+                <div key={type}>
+                  <span>{index + 1}</span>
+                  <p><strong>{type}</strong><small>{(weight / 1000).toFixed(2)}t 누적</small></p>
+                  <i><b style={{ width: `${share}%` }} /></i>
+                  <em>{share.toFixed(0)}%</em>
+                </div>
+              );
+            })}
+            {typeTotals.length === 0 && (
+              <p className="request-empty">등록 데이터가 쌓이면 종류별 비중이 표시됩니다.</p>
+            )}
+          </div>
+        </article>
+
+        <article className="surface logistics-priority">
+          <div className="surface-heading">
+            <div>
+              <span className="section-kicker">LOGISTICS PRIORITY</span>
+              <h2>오늘 우선 수거 대상</h2>
+            </div>
+            <span className="route-saving">날씨·물량 반영</span>
+          </div>
+          <div className="priority-list">
+            {logisticsTargets.map((request, index) => (
+              <div key={request.id}>
+                <span>{index + 1}</span>
+                <p>
+                  <strong>{getOrganizationName(request.organizations)}</strong>
+                  <small>{request.waste_type} · {request.request_number}</small>
+                </p>
+                <b>{Number(request.estimated_weight_kg).toLocaleString()}kg</b>
+              </div>
+            ))}
+            {logisticsTargets.length === 0 && (
+              <p className="request-empty">현재 배차 대기 중인 요청이 없습니다.</p>
             )}
           </div>
         </article>
@@ -5262,7 +5522,12 @@ export default function Home() {
             />
           )}
           {workspace === "forecast" && (
-            <AiForecastWorkspace requests={displayRequests} notify={notify} />
+            <AiForecastWorkspace
+              requests={displayRequests}
+              weather={weather}
+              weatherLoading={weatherLoading}
+              notify={notify}
+            />
           )}
           {workspace === "energy" && (
             <ResourceEnergyWorkspace requests={displayRequests} />

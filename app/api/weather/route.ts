@@ -127,6 +127,8 @@ export async function GET(request: Request) {
         location: "부산광역시",
         temperatureC,
         precipitationProbability,
+        precipitationMm: precipitation,
+        windSpeedMs: windSpeed,
         weather: description.label,
         symbol: description.symbol,
         windDirection: `${windDirection(Number(current.wind_direction_10m ?? 0))}풍 ${windSpeed.toFixed(1)}m/s`,
