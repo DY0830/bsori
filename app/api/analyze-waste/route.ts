@@ -18,10 +18,7 @@ const responseSchema = {
     recommendedPickupHours: { type: "NUMBER" },
     confidence: { type: "NUMBER" },
     summary: { type: "STRING" },
-    warnings: {
-      type: "ARRAY",
-      items: { type: "STRING" },
-    },
+    warnings: { type: "ARRAY", items: { type: "STRING" } },
   },
   required: [
     "wasteType",
@@ -44,11 +41,10 @@ export async function POST(request: Request) {
 
   if (!geminiApiKey || !supabaseUrl || !supabaseKey) {
     return Response.json(
-      { error: "AI 분석을 위한 서버 환경변수가 설정되지 않았습니다." },
+      { error: "AI 분석 서버 설정이 완료되지 않았습니다." },
       { status: 503 },
     );
   }
-
   if (!authorization?.startsWith("Bearer ")) {
     return Response.json({ error: "로그인이 필요합니다." }, { status: 401 });
   }
@@ -75,7 +71,6 @@ export async function POST(request: Request) {
     .select("role, is_active")
     .eq("id", user.id)
     .maybeSingle();
-
   if (
     profileError ||
     !profile?.is_active ||
@@ -99,23 +94,21 @@ export async function POST(request: Request) {
 
   const mimeType = body.mimeType ?? "";
   const imageBase64 = body.imageBase64 ?? "";
-
   if (!mimeType.startsWith("image/") || !imageBase64) {
     return Response.json(
       { error: "분석할 이미지가 필요합니다." },
       { status: 400 },
     );
   }
-
   if (imageBase64.length > 14_000_000) {
     return Response.json(
-      { error: "분석할 이미지가 너무 큽니다. 10MB 이하 사진을 사용해 주세요." },
+      { error: "이미지가 너무 큽니다. 10MB 이하 사진을 사용해 주세요." },
       { status: 413 },
     );
   }
 
   const geminiResponse = await fetch(
-    "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent",
+    "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent",
     {
       method: "POST",
       headers: {
@@ -129,18 +122,14 @@ export async function POST(request: Request) {
               {
                 text: [
                   "이 사진은 수산 부산물 수거 요청에 첨부된 현장 사진입니다.",
-                  "사진에 보이는 부산물의 종류와 상태를 보수적으로 분석하세요.",
-                  "사진만으로 무게를 정확히 알 수 없으므로 범위로 추정하고,",
-                  "판단할 수 없는 항목은 추정임을 summary 또는 warnings에 명시하세요.",
+                  "보이는 부산물의 종류와 상태를 보수적으로 분석하세요.",
+                  "사진만으로 무게를 정확히 알 수 없으므로 범위로 추정하고 추정의 한계를 summary 또는 warnings에 명시하세요.",
                   "confidence는 0부터 100 사이 숫자입니다.",
-                  "모든 문자열은 한국어로 작성하세요.",
+                  "모든 문자 응답은 한국어로 작성하세요.",
                 ].join(" "),
               },
               {
-                inline_data: {
-                  mime_type: mimeType,
-                  data: imageBase64,
-                },
+                inline_data: { mime_type: mimeType, data: imageBase64 },
               },
             ],
           },
@@ -160,7 +149,6 @@ export async function POST(request: Request) {
       content?: { parts?: Array<{ text?: string }> };
     }>;
   };
-
   if (!geminiResponse.ok) {
     return Response.json(
       {

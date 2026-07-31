@@ -3394,6 +3394,10 @@ button.request-row {
   font-size: 14px;
   font-weight: 900;
 }
+.need-setting.connected {
+  color: #176f4c;
+  background: #e8f7ef;
+}
 
 .linked-role-grid button div {
   min-width: 0;

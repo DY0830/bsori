@@ -371,6 +371,7 @@ const supabaseConfigured = Boolean(
 );
 const integrations = [
   {
+    statusKey: "supabase",
     name: "Supabase",
     detail: "Auth · PostgreSQL · Storage · Realtime",
     status: supabaseConfigured ? "연결 완료" : "설정 필요",
@@ -379,6 +380,7 @@ const integrations = [
     mark: "S",
   },
   {
+    statusKey: "gemini",
     name: "Gemini API",
     detail: "사진 판별 · 문서 정보 추출",
     status: "연결 완료",
@@ -387,6 +389,7 @@ const integrations = [
     mark: "G",
   },
   {
+    statusKey: "kakaoMaps",
     name: "Kakao Maps",
     detail: "지도 · 주소 좌표 변환",
     status: "연결 완료",
@@ -395,6 +398,7 @@ const integrations = [
     mark: "K",
   },
   {
+    statusKey: "kakaoMobility",
     name: "Kakao Mobility",
     detail: "경로 · 거리 · 예상 시간",
     status: "서버 연결 완료",
@@ -403,7 +407,8 @@ const integrations = [
     mark: "M",
   },
   {
-    name: "기상청 단기예보",
+    statusKey: "weather",
+    name: "부산 기상예보",
     detail: "강수 · 고온 · 수거 위험 판단",
     status: "연결 완료",
     group: "날씨",
@@ -411,6 +416,7 @@ const integrations = [
     mark: "W",
   },
   {
+    statusKey: "resend",
     name: "Resend",
     detail: "요청 · 지연 · 완료 이메일",
     status: "서버 알림 연결",
@@ -419,6 +425,7 @@ const integrations = [
     mark: "R",
   },
   {
+    statusKey: "auctionData",
     name: "부산 위판 데이터",
     detail: "공동어시장 위판량 · 어종 · 입항량",
     status: "데이터 API 필요",
@@ -427,6 +434,7 @@ const integrations = [
     mark: "B",
   },
   {
+    statusKey: "digestionPlc",
     name: "혼합소화 PLC",
     detail: "투입비 · pH · 유기물 부하 · 체류시간",
     status: "설비 연동 필요",
@@ -435,6 +443,7 @@ const integrations = [
     mark: "P",
   },
   {
+    statusKey: "essBms",
     name: "ESS BMS",
     detail: "SOC · 충방전 · 발전 잉여전력",
     status: "설비 연동 필요",
@@ -1056,14 +1065,14 @@ function AdminDispatchPanel({
   }, [notify, pendingRequests, supabase]);
 
   useEffect(() => {
-    void loadResources();
+    queueMicrotask(() => void loadResources());
   }, [loadResources]);
 
   useEffect(() => {
     const firstVehicle = vehicles.find(
       (vehicle) => vehicle.driver_id === driverId,
     );
-    setVehicleId(firstVehicle?.id ?? "");
+    queueMicrotask(() => setVehicleId(firstVehicle?.id ?? ""));
   }, [driverId, vehicles]);
 
   const registerVehicle = async (event: FormEvent<HTMLFormElement>) => {
@@ -1193,13 +1202,13 @@ function AdminDispatchPanel({
             </select>
           </label>
           <label>
-            <span>자동 방문 순서</span>
+            <span>대기 목록 순서</span>
             <input
               type="number"
               min="1"
               value={suggestedRouteOrder}
               readOnly
-              aria-label="자동 계산 방문 순서"
+              aria-label="대기 목록 방문 순서"
             />
           </label>
           <button className="primary-action" disabled={busy}>
@@ -1483,23 +1492,25 @@ function AdminOperationsWorkspace({
   ).length;
   const mapStops = useMemo(
     () =>
-      requests.flatMap((request) => {
-        if (
-          request.latitude === null ||
-          request.longitude === null ||
-          ["processed", "completed"].includes(request.status)
-        ) {
-          return [];
-        }
+      optimizeRouteStops(
+        requests.flatMap((request) => {
+          if (
+            request.latitude === null ||
+            request.longitude === null ||
+            ["processed", "completed"].includes(request.status)
+          ) {
+            return [];
+          }
 
-        return [
-          {
-            name: getOrganizationName(request.organizations),
-            latitude: Number(request.latitude),
-            longitude: Number(request.longitude),
-          },
-        ];
-      }),
+          return [
+            {
+              name: getOrganizationName(request.organizations),
+              latitude: Number(request.latitude),
+              longitude: Number(request.longitude),
+            },
+          ];
+        }),
+      ),
     [requests],
   );
 
@@ -1556,7 +1567,7 @@ function AdminOperationsWorkspace({
         </div>
         <KakaoRouteMap
           supabase={supabase}
-          stops={mapStops.length > 0 ? mapStops : routeStops}
+          stops={mapStops}
         />
       </article>
 
@@ -1600,15 +1611,47 @@ function AiForecastWorkspace({
   requests: DbWasteRequest[];
   notify: (message: string) => void;
 }) {
+  const [forecastBaseDate] = useState(() => new Date());
   const registeredTons =
     requests.reduce(
       (sum, request) => sum + Number(request.estimated_weight_kg || 0),
       0,
     ) / 1000;
-  const auctionForecast = [38.2, 41.6, 44.1, 42.8, 46.5, 49.2, 43.7];
-  const maxForecast = Math.max(...auctionForecast);
-  const byproductForecast = auctionForecast[1] * 0.16;
-  const requiredVehicles = Math.max(1, Math.ceil(byproductForecast / 2.5));
+  const recentDailyTons = Array.from({ length: 7 }, (_, index) => {
+    const date = new Date(forecastBaseDate);
+    date.setHours(0, 0, 0, 0);
+    date.setDate(date.getDate() - (6 - index));
+    const nextDate = new Date(date);
+    nextDate.setDate(date.getDate() + 1);
+    return (
+      requests
+        .filter((request) => {
+          const createdAt = new Date(request.created_at);
+          return createdAt >= date && createdAt < nextDate;
+        })
+        .reduce(
+          (sum, request) => sum + Number(request.estimated_weight_kg || 0),
+          0,
+        ) / 1000
+    );
+  });
+  const daysWithData = recentDailyTons.filter((value) => value > 0);
+  const averageDailyTons =
+    daysWithData.length > 0
+      ? daysWithData.reduce((sum, value) => sum + value, 0) /
+        daysWithData.length
+      : 0;
+  const forecastFactors = [0.96, 1, 1.04, 0.98, 1.08, 1.12, 1.02];
+  const byproductForecast = forecastFactors.map(
+    (factor) => averageDailyTons * factor,
+  );
+  const maxForecast = Math.max(...byproductForecast, 0.1);
+  const auctionEquivalent =
+    byproductForecast[1] > 0 ? byproductForecast[1] / 0.16 : 0;
+  const requiredVehicles =
+    byproductForecast[1] > 0
+      ? Math.ceil(byproductForecast[1] / 2.5)
+      : 0;
   const logisticsTargets = [...requests]
     .filter((request) => request.status === "requested")
     .sort(
@@ -1627,20 +1670,24 @@ function AiForecastWorkspace({
             물량을 계획합니다.
           </p>
         </div>
-        <span className="model-chip">AI 예측 시뮬레이션</span>
+        <span className="model-chip">Supabase 운영 데이터 예측</span>
       </section>
 
       <section className="metric-row">
         <MiniMetric
-          label="내일 위판량 예측"
-          value={`${auctionForecast[1]}t`}
-          note="예시 학습 데이터 기준"
+          label="내일 부산물 발생 예측"
+          value={`${byproductForecast[1].toFixed(2)}t`}
+          note={
+            daysWithData.length > 0
+              ? `최근 ${daysWithData.length}일 등록량 기준`
+              : "등록 데이터가 필요합니다"
+          }
           accent="mint"
         />
         <MiniMetric
-          label="부산물 발생 예측"
-          value={`${byproductForecast.toFixed(1)}t`}
-          note="위판량의 약 16%"
+          label="위판량 환산 추정"
+          value={`${auctionEquivalent.toFixed(1)}t`}
+          note="부산물 비율 16% 가정"
           accent="orange"
         />
         <MiniMetric
@@ -1662,26 +1709,32 @@ function AiForecastWorkspace({
           <div className="surface-heading">
             <div>
               <span className="section-kicker">7-DAY AUCTION FORECAST</span>
-              <h2>부산 위판량 7일 예측</h2>
+              <h2>부산물 발생량 7일 예측</h2>
             </div>
             <button
               className="quiet-button"
               onClick={() =>
-                notify("공공·위판 데이터 API 연결 후 자동 갱신됩니다.")
+                notify(
+                  "현재는 Supabase 등록 이력 기반입니다. 실제 위판량은 부산 위판 데이터 API 연결이 필요합니다.",
+                )
               }
             >
               데이터 안내
             </button>
           </div>
           <div className="forecast-chart">
-            {auctionForecast.map((value, index) => (
+            {byproductForecast.map((value, index) => (
               <div key={`${value}-${index}`}>
                 <strong>{value}</strong>
                 <i style={{ height: `${(value / maxForecast) * 100}%` }} />
                 <span>
                   {new Intl.DateTimeFormat("ko-KR", {
                     weekday: "short",
-                  }).format(new Date(Date.now() + index * 86400000))}
+                  }).format(
+                    new Date(
+                      forecastBaseDate.getTime() + index * 86400000,
+                    ),
+                  )}
                 </span>
               </div>
             ))}
@@ -1782,7 +1835,7 @@ function ResourceEnergyWorkspace({ requests }: { requests: DbWasteRequest[] }) {
             계획으로 연결합니다.
           </p>
         </div>
-        <span className="model-chip green">AI 제어 권고</span>
+        <span className="model-chip green">운영 시뮬레이션</span>
       </section>
 
       <section className="metric-row">
@@ -1806,8 +1859,8 @@ function ResourceEnergyWorkspace({ requests }: { requests: DbWasteRequest[] }) {
         />
         <MiniMetric
           label="ESS 충전율"
-          value="68%"
-          note="BMS 연결 전 예시값"
+          value="미연동"
+          note="BMS 연결 후 실시간 표시"
           accent="violet"
         />
       </section>
@@ -1858,16 +1911,16 @@ function ResourceEnergyWorkspace({ requests }: { requests: DbWasteRequest[] }) {
               <span className="section-kicker">ESS OPERATION</span>
               <h2>ESS 충·방전 계획</h2>
             </div>
-            <span className="weather-place">SOC 68%</span>
+            <span className="weather-place">BMS 미연동</span>
           </div>
           <div className="battery-visual">
             <div>
-              <i />
-              <span>68%</span>
+              <i style={{ height: "0%" }} />
+              <span>–</span>
             </div>
             <p>
-              <strong>현재: 대기</strong>
-              <small>바이오가스 발전 잉여전력 충전 준비</small>
+               <strong>실시간 상태 없음</strong>
+               <small>ESS BMS API 연결 후 SOC와 운전 상태를 표시합니다.</small>
             </p>
           </div>
           <div className="ess-schedule">
@@ -1920,13 +1973,16 @@ function DischargerWorkspace({
   notify,
   supabase,
   profile,
+  requests,
   onCreated,
 }: {
   notify: (message: string) => void;
   supabase: SupabaseClient;
   profile: Profile;
+  requests: DbWasteRequest[];
   onCreated: () => Promise<void>;
 }) {
+  const formRef = useRef<HTMLFormElement>(null);
   const [photoName, setPhotoName] = useState("");
   const [photo, setPhoto] = useState<File | null>(null);
   const [analyzed, setAnalyzed] = useState(false);
@@ -1940,6 +1996,68 @@ function DischargerWorkspace({
   const [addressSearching, setAddressSearching] = useState(false);
   const [registered, setRegistered] = useState("");
   const [saving, setSaving] = useState(false);
+  const [defaultPickupAt] = useState(() => {
+    const date = new Date();
+    date.setHours(date.getHours() + 2, 0, 0, 0);
+    const offset = date.getTimezoneOffset() * 60_000;
+    return new Date(date.getTime() - offset).toISOString().slice(0, 16);
+  });
+  const draftKey = `bsori-request-draft-${profile.id}`;
+  const recentRequests = requests
+    .filter(
+      (request) =>
+        profile.role !== "admin" ||
+        getOrganizationName(request.organizations) === "해원수산",
+    )
+    .slice(0, 3);
+
+  const saveDraft = () => {
+    if (!formRef.current) return;
+    const form = new FormData(formRef.current);
+    window.localStorage.setItem(
+      draftKey,
+      JSON.stringify({
+        wasteType: String(form.get("wasteType") ?? ""),
+        estimatedWeight: String(form.get("estimatedWeight") ?? ""),
+        storageCondition: String(form.get("storageCondition") ?? ""),
+        preferredPickupAt: String(form.get("preferredPickupAt") ?? ""),
+        pickupAddress,
+        memo: String(form.get("memo") ?? ""),
+      }),
+    );
+    notify("작성 중인 내용을 이 기기에 임시 저장했습니다.");
+  };
+
+  const loadDraft = () => {
+    if (!formRef.current) return;
+    const raw = window.localStorage.getItem(draftKey);
+    if (!raw) {
+      notify("저장된 임시 내용이 없습니다.");
+      return;
+    }
+    try {
+      const draft = JSON.parse(raw) as Record<string, string>;
+      const fields = formRef.current.elements;
+      ["wasteType", "estimatedWeight", "storageCondition", "preferredPickupAt", "memo"].forEach(
+        (name) => {
+          const field = fields.namedItem(name) as
+            | HTMLInputElement
+            | HTMLSelectElement
+            | HTMLTextAreaElement
+            | null;
+          if (field && typeof draft[name] === "string") {
+            field.value = draft[name];
+          }
+        },
+      );
+      setPickupAddress(draft.pickupAddress || pickupAddress);
+      setPickupCoordinate(null);
+      notify("임시 저장 내용을 불러왔습니다.");
+    } catch {
+      window.localStorage.removeItem(draftKey);
+      notify("임시 저장 내용이 손상되어 초기화했습니다.");
+    }
+  };
 
   const handlePhoto = (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -2172,6 +2290,7 @@ function DischargerWorkspace({
       }
 
       setRegistered(requestNumber);
+      window.localStorage.removeItem(draftKey);
       notify(
         emailSent
           ? `수거 요청 ${requestNumber} 저장 및 이메일 알림이 완료되었습니다.`
@@ -2219,7 +2338,11 @@ function DischargerWorkspace({
       </section>
 
       <section className="form-layout">
-        <form className="surface registration-form" onSubmit={submit}>
+        <form
+          ref={formRef}
+          className="surface registration-form"
+          onSubmit={submit}
+        >
           <div className="surface-heading">
             <div>
               <span className="section-kicker">NEW REQUEST</span>
@@ -2263,7 +2386,7 @@ function DischargerWorkspace({
               <input
                 name="preferredPickupAt"
                 type="datetime-local"
-                defaultValue="2026-07-30T16:00"
+                  defaultValue={defaultPickupAt}
               />
             </label>
             <label className="full">
@@ -2318,7 +2441,14 @@ function DischargerWorkspace({
             <button
               type="button"
               className="secondary-button"
-              onClick={() => notify("작성 중인 내용이 임시 저장되었습니다.")}
+              onClick={loadDraft}
+            >
+              임시 내용 불러오기
+            </button>
+            <button
+              type="button"
+              className="secondary-button"
+              onClick={saveDraft}
             >
               임시 저장
             </button>
@@ -2403,19 +2533,25 @@ function DischargerWorkspace({
                 <h2>최근 요청</h2>
               </div>
             </div>
-            {[
-              ["REQ-0729-012", "어류 뼈·머리 · 380kg", "처리 완료"],
-              ["REQ-0728-008", "생선 내장 · 510kg", "반입 완료"],
-              ["REQ-0727-021", "혼합 부산물 · 290kg", "처리 완료"],
-            ].map(([id, detail, status]) => (
-              <div className="recent-row" key={id}>
+            {recentRequests.map((request) => (
+              <div className="recent-row" key={request.id}>
                 <span>
-                  <strong>{id}</strong>
-                  <small>{detail}</small>
+                  <strong>{request.request_number}</strong>
+                  <small>
+                    {request.waste_type} ·{" "}
+                    {Number(request.estimated_weight_kg).toLocaleString()}kg
+                  </small>
                 </span>
-                <StatusBadge status={status} />
+                <StatusBadge
+                  status={
+                    requestStatusLabel[request.status] ?? request.status
+                  }
+                />
               </div>
             ))}
+            {recentRequests.length === 0 && (
+              <p className="request-empty">등록된 수거 요청이 없습니다.</p>
+            )}
           </article>
         </aside>
       </section>
@@ -2423,33 +2559,42 @@ function DischargerWorkspace({
   );
 }
 
-const routeStops = [
-  {
-    name: "부산공동어시장",
-    longitude: 129.0276,
-    latitude: 35.0976,
-  },
-  {
-    name: "남항수산가공",
-    longitude: 129.0365,
-    latitude: 35.0846,
-  },
-  {
-    name: "해원수산",
-    longitude: 129.0708,
-    latitude: 35.0884,
-  },
-];
-
 const resourceFacility = {
   name: "B.SORI 자원화센터",
   longitude: 129.0445,
   latitude: 35.0878,
 };
 
+function optimizeRouteStops(stops: Array<Coordinate & { name: string }>) {
+  const remaining = [...stops];
+  const optimized: Array<Coordinate & { name: string }> = [];
+  let current: Coordinate = resourceFacility;
+
+  while (remaining.length > 0) {
+    let closestIndex = 0;
+    let closestDistance = Number.POSITIVE_INFINITY;
+    remaining.forEach((stop, index) => {
+      const latitudeDistance = stop.latitude - current.latitude;
+      const longitudeDistance = stop.longitude - current.longitude;
+      const distance =
+        latitudeDistance * latitudeDistance +
+        longitudeDistance * longitudeDistance;
+      if (distance < closestDistance) {
+        closestDistance = distance;
+        closestIndex = index;
+      }
+    });
+    const [next] = remaining.splice(closestIndex, 1);
+    optimized.push(next);
+    current = next;
+  }
+
+  return optimized;
+}
+
 function KakaoRouteMap({
   supabase,
-  stops = routeStops,
+  stops = [],
 }: {
   supabase: SupabaseClient;
   stops?: Array<Coordinate & { name: string }>;
@@ -2571,7 +2716,7 @@ function KakaoRouteMap({
             </strong>
             <small>
               {mapError ||
-                "부산 수거지 3곳의 실제 이동 경로를 불러오고 있습니다."}
+                `부산 수거지 ${stops.length}곳의 실제 이동 경로를 불러오고 있습니다.`}
             </small>
           </div>
         )}
@@ -3007,7 +3152,7 @@ function LiveDriverWorkspace({
   }, [notify, supabase]);
 
   useEffect(() => {
-    void loadAssignments();
+    queueMicrotask(() => void loadAssignments());
     const channel = supabase
       .channel(`driver-workflow-${profile.id}`)
       .on(
@@ -3333,7 +3478,7 @@ function LiveFacilityWorkspace({
   }, [notify, supabase]);
 
   useEffect(() => {
-    void loadFacilityWork();
+    queueMicrotask(() => void loadFacilityWork());
     const channel = supabase
       .channel(`facility-workflow-${profile.id}`)
       .on(
@@ -3700,6 +3845,24 @@ function IntegrationsWorkspace({
   onRoleChange: (role: UserRole) => void;
 }) {
   const canSwitchAllRoles = profile.role === "admin";
+  const [serviceStatus, setServiceStatus] = useState<Record<string, boolean>>(
+    {},
+  );
+
+  useEffect(() => {
+    queueMicrotask(async () => {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+      if (!session?.access_token) return;
+      const response = await fetch("/api/integrations/status", {
+        cache: "no-store",
+        headers: { Authorization: `Bearer ${session.access_token}` },
+      });
+      if (!response.ok) return;
+      setServiceStatus((await response.json()) as Record<string, boolean>);
+    });
+  }, [supabase]);
 
   return (
     <div className="page-stack">
@@ -3767,7 +3930,17 @@ function IntegrationsWorkspace({
         <h2>API · 데이터베이스 연결 상태</h2>
       </div>
       <section className="integration-grid">
-        {integrations.map((integration) => (
+        {integrations.map((integration) => {
+          const configured = serviceStatus[integration.statusKey];
+          const status =
+            configured === true
+              ? "연결 완료"
+              : configured === false
+                ? integration.status.includes("필요")
+                  ? integration.status
+                  : "설정 필요"
+                : "확인 중";
+          return (
           <article className="surface integration-card" key={integration.name}>
             <span className={`integration-mark ${integration.tone}`}>
               {integration.mark}
@@ -3777,16 +3950,25 @@ function IntegrationsWorkspace({
               <h2>{integration.name}</h2>
               <p>{integration.detail}</p>
             </div>
-            <span className="need-setting">{integration.status}</span>
+            <span
+              className={`need-setting ${configured === true ? "connected" : ""}`}
+            >
+              {status}
+            </span>
             <button
               onClick={() =>
-                notify(`${integration.name} 환경변수 안내를 확인해 주세요.`)
+                notify(
+                  configured
+                    ? `${integration.name} 서버 설정이 연결되어 있습니다.`
+                    : `${integration.name} 추가 연결 설정이 필요합니다.`,
+                )
               }
             >
-              연결 설정
+              {configured ? "상태 확인" : "연결 설정"}
             </button>
           </article>
-        ))}
+          );
+        })}
       </section>
       {profile.role === "admin" && (
         <AdminInvitePanel supabase={supabase} notify={notify} />
@@ -3967,7 +4149,7 @@ export default function Home() {
   }, [profile, activeRole, supabase]);
 
   useEffect(() => {
-    void loadWeather();
+    queueMicrotask(() => void loadWeather());
     const interval = window.setInterval(
       () => void loadWeather(),
       30 * 60 * 1000,
@@ -4049,6 +4231,11 @@ export default function Home() {
       adminNavigation[0],
     [visibleNavigation, workspace],
   );
+  const notificationCount = requests.filter((request) =>
+    ["requested", "collecting", "collected", "processing"].includes(
+      request.status,
+    ),
+  ).length;
   const changeActiveRole = (nextRole: UserRole) => {
     if (profile?.role !== "admin" && nextRole !== profile?.role) {
       notify("이 계정에는 해당 업무 화면 권한이 없습니다.");
@@ -4174,9 +4361,13 @@ export default function Home() {
             )}
             <button
               className="top-icon"
-              aria-label="검색"
+              aria-label="요청 현황 보기"
               onClick={() =>
-                notify(`${requests.length}건의 요청이 검색됩니다.`)
+                setWorkspace(
+                  profile.role === "admin"
+                    ? "operations"
+                    : roleWorkspace[activeRole],
+                )
               }
             >
               ⌕
@@ -4184,9 +4375,15 @@ export default function Home() {
             <button
               className="top-icon notification"
               aria-label="알림"
-              onClick={() => notify("새로운 운영 알림이 3건 있습니다.")}
+              onClick={() =>
+                notify(
+                  notificationCount > 0
+                    ? `확인이 필요한 진행 중 요청이 ${notificationCount}건 있습니다.`
+                    : "확인이 필요한 운영 요청이 없습니다.",
+                )
+              }
             >
-              ●<i />
+              ●{notificationCount > 0 && <i />}
             </button>
             <div className="account">
               <span>{profile.full_name.slice(0, 1)}</span>
@@ -4239,6 +4436,7 @@ export default function Home() {
               notify={notify}
               supabase={supabase}
               profile={profile}
+              requests={requests}
               onCreated={loadRequests}
             />
           )}

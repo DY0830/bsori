@@ -36,11 +36,10 @@ export async function POST(request: Request) {
     !supabaseKey
   ) {
     return Response.json(
-      { error: "이메일 알림 환경변수가 설정되지 않았습니다." },
+      { error: "이메일 알림 서버 설정이 완료되지 않았습니다." },
       { status: 503 },
     );
   }
-
   if (!authorization?.startsWith("Bearer ")) {
     return Response.json({ error: "로그인이 필요합니다." }, { status: 401 });
   }
@@ -54,7 +53,6 @@ export async function POST(request: Request) {
     data: { user },
     error: userError,
   } = await supabase.auth.getUser(accessToken);
-
   if (userError || !user) {
     return Response.json(
       { error: "로그인 세션이 올바르지 않습니다." },
@@ -67,7 +65,6 @@ export async function POST(request: Request) {
     .select("role, is_active")
     .eq("id", user.id)
     .maybeSingle();
-
   if (
     profileError ||
     !profile?.is_active ||
@@ -141,17 +138,16 @@ export async function POST(request: Request) {
       `,
     }),
   });
-
   const resendPayload = (await resendResponse.json()) as {
     id?: string;
     message?: string;
   };
-
   if (!resendResponse.ok) {
     return Response.json(
       {
         error:
-          resendPayload.message ?? "Resend에서 이메일을 발송하지 못했습니다.",
+          resendPayload.message ??
+          "Resend에서 이메일을 발송하지 못했습니다.",
       },
       { status: 502 },
     );
