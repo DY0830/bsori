@@ -518,6 +518,90 @@ const requestStatusLabel: Record<string, string> = {
   cancelled: "취소",
 };
 
+const demoRequests: DbWasteRequest[] = [
+  {
+    id: "demo-request-1",
+    request_number: "DEMO-0731-001",
+    waste_type: "생선 내장",
+    estimated_weight_kg: 420,
+    pickup_address: "부산광역시 영도구 해양로 24",
+    latitude: 35.0884,
+    longitude: 129.0708,
+    status: "requested",
+    created_at: "2026-07-31T07:30:00+09:00",
+    organizations: { name: "해원수산" },
+  },
+  {
+    id: "demo-request-2",
+    request_number: "DEMO-0731-002",
+    waste_type: "어류 뼈·머리",
+    estimated_weight_kg: 1240,
+    pickup_address: "부산광역시 서구 충무대로 202",
+    latitude: 35.0976,
+    longitude: 129.0276,
+    status: "assigned",
+    created_at: "2026-07-31T06:45:00+09:00",
+    organizations: { name: "부산공동어시장" },
+  },
+  {
+    id: "demo-request-3",
+    request_number: "DEMO-0731-003",
+    waste_type: "혼합 부산물",
+    estimated_weight_kg: 540,
+    pickup_address: "부산광역시 영도구 남항서로 85",
+    latitude: 35.0846,
+    longitude: 129.0365,
+    status: "collecting",
+    created_at: "2026-07-30T15:20:00+09:00",
+    organizations: { name: "남항수산가공" },
+  },
+  {
+    id: "demo-request-4",
+    request_number: "DEMO-0730-004",
+    waste_type: "갑각류 껍질",
+    estimated_weight_kg: 760,
+    pickup_address: "부산광역시 중구 자갈치해안로 52",
+    latitude: 35.0967,
+    longitude: 129.0305,
+    status: "collected",
+    created_at: "2026-07-30T09:10:00+09:00",
+    organizations: { name: "자갈치수산" },
+  },
+  {
+    id: "demo-request-5",
+    request_number: "DEMO-0729-005",
+    waste_type: "생선 내장",
+    estimated_weight_kg: 610,
+    pickup_address: "부산광역시 영도구 태종로 727",
+    latitude: 35.0758,
+    longitude: 129.0671,
+    status: "processing",
+    created_at: "2026-07-29T08:30:00+09:00",
+    organizations: { name: "영도수산" },
+  },
+  {
+    id: "demo-request-6",
+    request_number: "DEMO-0728-006",
+    waste_type: "어류 뼈·머리",
+    estimated_weight_kg: 890,
+    pickup_address: "부산광역시 기장군 기장해안로 147",
+    latitude: 35.1926,
+    longitude: 129.2233,
+    status: "completed",
+    created_at: "2026-07-28T10:00:00+09:00",
+    organizations: { name: "기장수산가공" },
+  },
+];
+
+const demoRouteStops = demoRequests
+  .filter((request) => request.latitude !== null && request.longitude !== null)
+  .slice(0, 3)
+  .map((request) => ({
+    name: getOrganizationName(request.organizations),
+    latitude: Number(request.latitude),
+    longitude: Number(request.longitude),
+  }));
+
 function getOrganizationName(
   organization: Profile["organizations"] | DbWasteRequest["organizations"],
 ) {
@@ -1471,16 +1555,77 @@ function AdminOverview({
   );
 }
 
+function DemoDispatchPanel({ notify }: { notify: (message: string) => void }) {
+  const [confirmed, setConfirmed] = useState(false);
+
+  return (
+    <article className="surface dispatch-panel demo-dispatch-panel">
+      <div className="surface-heading">
+        <div>
+          <span className="section-kicker">DEMO DISPATCH</span>
+          <h2>기사·차량 배차 시연</h2>
+        </div>
+        <span className="demo-data-badge">시연 데이터</span>
+      </div>
+      <div className="dispatch-grid">
+        <form
+          onSubmit={(event) => {
+            event.preventDefault();
+            setConfirmed(true);
+            notify("시연 배차가 김도윤 기사 화면에 전달되었습니다.");
+          }}
+        >
+          <label>
+            <span>접수 요청</span>
+            <select defaultValue="DEMO-0731-001">
+              <option>DEMO-0731-001 · 해원수산 · 420kg</option>
+              <option>DEMO-0731-002 · 부산공동어시장 · 1,240kg</option>
+            </select>
+          </label>
+          <label>
+            <span>수거기사</span>
+            <select defaultValue="김도윤">
+              <option>김도윤 · 부산자원운송</option>
+              <option>이현수 · 부산자원운송</option>
+            </select>
+          </label>
+          <label>
+            <span>차량</span>
+            <select defaultValue="부산 82가 2481">
+              <option>부산 82가 2481 · 2,500kg</option>
+              <option>부산 83나 1104 · 1,000kg</option>
+            </select>
+          </label>
+          <label>
+            <span>방문 순서</span>
+            <input type="number" value="1" readOnly />
+          </label>
+          <button className="primary-action">
+            {confirmed ? "배차 전달 완료" : "배차 확정 시연"}
+          </button>
+        </form>
+        <div className="demo-dispatch-summary">
+          <strong>{confirmed ? "기사 화면 전달 완료" : "배차 준비 완료"}</strong>
+          <span>김도윤 기사 · 부산 82가 2481</span>
+          <small>다음 화면에서 수거기사로 전환해 운행 상태를 변경해 보세요.</small>
+        </div>
+      </div>
+    </article>
+  );
+}
+
 function AdminOperationsWorkspace({
   notify,
   requests,
   supabase,
   onChanged,
+  demoMode,
 }: {
   notify: (message: string) => void;
   requests: DbWasteRequest[];
   supabase: SupabaseClient;
   onChanged: () => Promise<void>;
+  demoMode: boolean;
 }) {
   const pendingCount = requests.filter(
     (request) => request.status === "requested",
@@ -1546,12 +1691,16 @@ function AdminOperationsWorkspace({
         ))}
       </section>
 
-      <AdminDispatchPanel
-        supabase={supabase}
-        requests={requests}
-        notify={notify}
-        onChanged={onChanged}
-      />
+      {demoMode ? (
+        <DemoDispatchPanel notify={notify} />
+      ) : (
+        <AdminDispatchPanel
+          supabase={supabase}
+          requests={requests}
+          notify={notify}
+          onChanged={onChanged}
+        />
+      )}
 
       <article className="surface route-map-card">
         <div className="surface-heading">
@@ -1974,12 +2123,14 @@ function DischargerWorkspace({
   supabase,
   profile,
   requests,
+  demoMode,
   onCreated,
 }: {
   notify: (message: string) => void;
   supabase: SupabaseClient;
   profile: Profile;
   requests: DbWasteRequest[];
+  demoMode: boolean;
   onCreated: () => Promise<void>;
 }) {
   const formRef = useRef<HTMLFormElement>(null);
@@ -2198,6 +2349,16 @@ function DischargerWorkspace({
       String(form.get("preferredPickupAt") ?? "") || null;
     const pickupAddressValue = String(form.get("pickupAddress") ?? "");
     let photoPath: string | null = null;
+
+    if (demoMode) {
+      const demoNumber = `DEMO-${String(Date.now()).slice(-6)}`;
+      setRegistered(demoNumber);
+      setSaving(false);
+      notify(
+        `시연 요청 ${demoNumber}가 등록되었습니다. 실제 DB에는 저장되지 않습니다.`,
+      );
+      return;
+    }
 
     try {
       let requestOrganizationId = profile.organization_id;
@@ -2457,7 +2618,9 @@ function DischargerWorkspace({
                 ? "DB 저장 중..."
                 : registered
                   ? `${registered} 등록 완료`
-                  : "수거 요청 등록"}
+                  : demoMode
+                    ? "수거 요청 등록 시연"
+                    : "수거 요청 등록"}
             </button>
           </div>
         </form>
@@ -2819,7 +2982,7 @@ function DriverWorkspace({
     <div className="driver-shell">
       <section className="driver-top">
         <div>
-          <span className="page-kicker">DRIVER MOBILE</span>
+          <span className="page-kicker">DRIVER MOBILE · DEMO</span>
           <h1>안전 운행하세요, 김도윤 기사님.</h1>
           <p>오늘 3개 지점 · 총 예상 수거량 2.2톤</p>
         </div>
@@ -2851,7 +3014,7 @@ function DriverWorkspace({
             </div>
             <span className="route-saving">18분 단축</span>
           </div>
-          <KakaoRouteMap supabase={supabase} />
+          <KakaoRouteMap supabase={supabase} stops={demoRouteStops} />
         </article>
 
         <article className="task-stack">
@@ -2948,7 +3111,7 @@ function FacilityWorkspace({ notify }: { notify: (message: string) => void }) {
     <div className="page-stack">
       <section className="workspace-title">
         <div>
-          <span className="page-kicker">RESOURCE FACILITY</span>
+          <span className="page-kicker">RESOURCE FACILITY · DEMO</span>
           <h1>반입·검수·처리</h1>
           <p>차량 도착부터 계량, 검수, 자원화 처리 결과까지 기록합니다.</p>
         </div>
@@ -4023,6 +4186,7 @@ export default function Home() {
   const [requests, setRequests] = useState<DbWasteRequest[]>([]);
   const [weather, setWeather] = useState<WeatherForecast | null>(null);
   const [weatherLoading, setWeatherLoading] = useState(false);
+  const [demoMode, setDemoMode] = useState(false);
 
   const loadProfile = useCallback(
     async (nextUser: User) => {
@@ -4231,7 +4395,8 @@ export default function Home() {
       adminNavigation[0],
     [visibleNavigation, workspace],
   );
-  const notificationCount = requests.filter((request) =>
+  const displayRequests = demoMode ? demoRequests : requests;
+  const notificationCount = displayRequests.filter((request) =>
     ["requested", "collecting", "collected", "processing"].includes(
       request.status,
     ),
@@ -4253,6 +4418,16 @@ export default function Home() {
   const notify = (message: string) => {
     setToast(message);
     window.setTimeout(() => setToast(""), 3200);
+  };
+
+  const toggleDemoMode = () => {
+    const nextMode = !demoMode;
+    setDemoMode(nextMode);
+    notify(
+      nextMode
+        ? "시연 데이터가 켜졌습니다. 역할 화면을 바꾸며 전체 흐름을 보여주세요."
+        : "시연 모드를 종료하고 실제 Supabase 데이터로 돌아왔습니다.",
+    );
   };
 
   if (authLoading) {
@@ -4315,7 +4490,7 @@ export default function Home() {
             <span className="pulse-dot" />
             <div>
               <strong>데이터 동기화</strong>
-              <small>Realtime 구독 중</small>
+              <small>{demoMode ? "안전한 시연 데이터" : "Realtime 구독 중"}</small>
             </div>
           </div>
           <button onClick={() => setWorkspace("integrations")}>
@@ -4336,7 +4511,19 @@ export default function Home() {
             <strong>{current.label}</strong>
           </div>
           <div className="top-actions">
-            <span className="demo-chip live">LIVE</span>
+            <span className={`demo-chip ${demoMode ? "showcase" : "live"}`}>
+              {demoMode ? "DEMO" : "LIVE"}
+            </span>
+            {profile.role === "admin" && (
+              <button
+                className={`demo-mode-toggle ${demoMode ? "active" : ""}`}
+                type="button"
+                aria-pressed={demoMode}
+                onClick={toggleDemoMode}
+              >
+                {demoMode ? "시연 종료" : "시연 데이터 켜기"}
+              </button>
+            )}
             {profile.role === "admin" ? (
               <div className="role-switcher">
                 <span>현재 화면</span>
@@ -4409,9 +4596,24 @@ export default function Home() {
         </header>
 
         <div className="content">
+          {demoMode && (
+            <div className="showcase-banner" role="status">
+              <span>DEMO</span>
+              <div>
+                <strong>시연 데이터 모드</strong>
+                <small>
+                  아래 정보와 상태 변경은 발표용이며 실제 Supabase 운영 데이터에
+                  저장되지 않습니다.
+                </small>
+              </div>
+              <button onClick={() => setWorkspace("integrations")}>
+                역할 화면 전환
+              </button>
+            </div>
+          )}
           {workspace === "overview" && (
             <AdminOverview
-              requests={requests}
+              requests={displayRequests}
               weather={weather}
               weatherLoading={weatherLoading}
               onNavigate={setWorkspace}
@@ -4420,28 +4622,38 @@ export default function Home() {
           {workspace === "operations" && (
             <AdminOperationsWorkspace
               notify={notify}
-              requests={requests}
+              requests={displayRequests}
               supabase={supabase}
               onChanged={loadRequests}
+              demoMode={demoMode}
             />
           )}
           {workspace === "forecast" && (
-            <AiForecastWorkspace requests={requests} notify={notify} />
+            <AiForecastWorkspace requests={displayRequests} notify={notify} />
           )}
           {workspace === "energy" && (
-            <ResourceEnergyWorkspace requests={requests} />
+            <ResourceEnergyWorkspace requests={displayRequests} />
           )}
           {workspace === "discharger" && (
             <DischargerWorkspace
               notify={notify}
               supabase={supabase}
               profile={profile}
-              requests={requests}
+              requests={displayRequests}
+              demoMode={demoMode}
               onCreated={loadRequests}
             />
           )}
 
-          {workspace === "driver" && (
+          {workspace === "driver" && demoMode && (
+            <DriverWorkspace
+              notify={notify}
+              supabase={supabase}
+              weather={weather}
+              weatherLoading={weatherLoading}
+            />
+          )}
+          {workspace === "driver" && !demoMode && (
             <LiveDriverWorkspace
               notify={notify}
               supabase={supabase}
@@ -4451,7 +4663,10 @@ export default function Home() {
             />
           )}
 
-          {workspace === "facility" && (
+          {workspace === "facility" && demoMode && (
+            <FacilityWorkspace notify={notify} />
+          )}
+          {workspace === "facility" && !demoMode && (
             <LiveFacilityWorkspace
               notify={notify}
               supabase={supabase}
