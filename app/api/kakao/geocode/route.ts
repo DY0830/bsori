@@ -2,6 +2,21 @@ import { createClient } from "@supabase/supabase-js";
 
 export const runtime = "edge";
 
+type KakaoAddressDocument = {
+  address_name: string;
+  x: string;
+  y: string;
+  road_address?: { address_name?: string } | null;
+};
+
+type KakaoKeywordDocument = {
+  place_name: string;
+  address_name: string;
+  road_address_name: string;
+  x: string;
+  y: string;
+};
+
 export async function GET(request: Request) {
   const restKey = process.env.KAKAO_REST_API_KEY;
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -41,51 +56,75 @@ export async function GET(request: Request) {
     return Response.json({ error: "검색할 주소를 입력해 주세요." }, { status: 400 });
   }
 
-  const kakaoResponse = await fetch(
-    `https://dapi.kakao.com/v2/local/search/address.json?query=${encodeURIComponent(query)}`,
-    {
-      headers: { Authorization: `KakaoAK ${restKey}` },
-    },
-  );
-  const payload = (await kakaoResponse.json()) as {
-    errorType?: string;
+  const headers = { Authorization: `KakaoAK ${restKey}` };
+  const [addressResponse, keywordResponse] = await Promise.all([
+    fetch(
+      `https://dapi.kakao.com/v2/local/search/address.json?query=${encodeURIComponent(query)}&size=6`,
+      { headers },
+    ),
+    fetch(
+      `https://dapi.kakao.com/v2/local/search/keyword.json?query=${encodeURIComponent(query)}&size=8`,
+      { headers },
+    ),
+  ]);
+
+  const addressPayload = (await addressResponse.json()) as {
     message?: string;
-    documents?: Array<{
-      address_name: string;
-      x: string;
-      y: string;
-      road_address?: { address_name?: string } | null;
-    }>;
+    documents?: KakaoAddressDocument[];
+  };
+  const keywordPayload = (await keywordResponse.json()) as {
+    message?: string;
+    documents?: KakaoKeywordDocument[];
   };
 
-  if (!kakaoResponse.ok) {
-    const disabled =
-      payload.message?.includes("OPEN_MAP_AND_LOCAL") ?? false;
+  if (!addressResponse.ok && !keywordResponse.ok) {
+    const message = addressPayload.message || keywordPayload.message;
+    const disabled = message?.includes("OPEN_MAP_AND_LOCAL") ?? false;
     return Response.json(
       {
         error: disabled
-          ? "카카오디벨로퍼스에서 카카오맵 사용 설정을 ON으로 변경해 주세요."
-          : payload.message ??
-            "카카오 주소 검색을 사용할 수 없습니다. 카카오맵 사용 설정을 확인해 주세요.",
+          ? "카카오 디벨로퍼스에서 카카오맵 사용 설정을 ON으로 변경해 주세요."
+          : message || "카카오 주소 검색을 사용할 수 없습니다.",
       },
-      { status: kakaoResponse.status },
+      { status: addressResponse.status || keywordResponse.status },
     );
   }
 
-  const result = payload.documents?.[0];
-  if (!result) {
+  const candidates = [
+    ...(addressPayload.documents ?? []).map((document) => ({
+      name: document.road_address?.address_name || document.address_name,
+      address: document.road_address?.address_name || document.address_name,
+      longitude: Number(document.x),
+      latitude: Number(document.y),
+    })),
+    ...(keywordPayload.documents ?? []).map((document) => ({
+      name: document.place_name,
+      address:
+        document.road_address_name || document.address_name || document.place_name,
+      longitude: Number(document.x),
+      latitude: Number(document.y),
+    })),
+  ];
+
+  const uniqueResults = candidates
+    .filter(
+      (candidate, index, all) =>
+        Number.isFinite(candidate.longitude) &&
+        Number.isFinite(candidate.latitude) &&
+        all.findIndex(
+          (item) =>
+            item.longitude === candidate.longitude &&
+            item.latitude === candidate.latitude,
+        ) === index,
+    )
+    .slice(0, 8);
+
+  if (uniqueResults.length === 0) {
     return Response.json(
-      { error: "일치하는 주소를 찾지 못했습니다." },
+      { error: "일치하는 주소나 장소를 찾지 못했습니다." },
       { status: 404 },
     );
   }
 
-  return Response.json({
-    result: {
-      address:
-        result.road_address?.address_name || result.address_name || query,
-      longitude: Number(result.x),
-      latitude: Number(result.y),
-    },
-  });
+  return Response.json({ result: uniqueResults[0], results: uniqueResults });
 }

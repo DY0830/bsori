@@ -3667,3 +3667,261 @@ button.request-row {
     min-height: 108px;
   }
 }
+
+/* Route address search and multi-stop planner */
+.route-planner {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 14px;
+  align-items: stretch;
+  padding: 16px;
+}
+
+.route-address-picker {
+  position: relative;
+  min-width: 0;
+}
+
+.route-address-label {
+  display: block;
+  margin-bottom: 7px;
+  color: #405449;
+  font-size: 10px;
+  font-weight: 900;
+}
+
+.route-address-control {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+}
+
+.route-planner .route-address-control button {
+  height: 42px;
+  padding: 0 14px;
+  background: #315d48;
+}
+
+.route-address-selected,
+.route-address-error {
+  display: block;
+  margin-top: 6px;
+  font-size: 9px;
+  font-weight: 800;
+}
+
+.route-address-selected {
+  color: #16845a;
+}
+
+.route-address-error,
+.route-map-error {
+  color: #aa4639;
+}
+
+.route-address-results {
+  position: absolute;
+  z-index: 30;
+  top: calc(100% + 6px);
+  right: 0;
+  left: 0;
+  max-height: 240px;
+  overflow-y: auto;
+  padding: 6px;
+  border: 1px solid #cddbd2;
+  border-radius: 12px;
+  background: #fff;
+  box-shadow: 0 16px 34px rgba(24, 55, 39, 0.16);
+}
+
+.route-planner .route-address-results button {
+  width: 100%;
+  height: auto;
+  min-height: 48px;
+  padding: 9px 10px;
+  display: grid;
+  gap: 3px;
+  text-align: left;
+  white-space: normal;
+  color: #25372d;
+  background: transparent;
+}
+
+.route-planner .route-address-results button:hover {
+  background: #edf6f1;
+}
+
+.route-address-results strong {
+  font-size: 10px;
+}
+
+.route-address-results span {
+  color: #718077;
+  font-size: 9px;
+}
+
+.route-waypoints {
+  padding: 13px;
+  border: 1px solid #dbe6df;
+  border-radius: 12px;
+  background: #fff;
+}
+
+.route-waypoints-heading,
+.route-plan-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.route-waypoints-heading > div {
+  display: grid;
+  gap: 3px;
+}
+
+.route-waypoints-heading strong {
+  color: #2c4035;
+  font-size: 11px;
+}
+
+.route-waypoints-heading small,
+.route-waypoints-empty {
+  color: #76847c;
+  font-size: 9px;
+}
+
+.route-planner .route-waypoints-heading > button {
+  height: 36px;
+  background: #e7f3ec;
+  color: #176b49;
+}
+
+.route-waypoints-empty {
+  margin: 12px 0 0;
+  padding: 10px;
+  border-radius: 9px;
+  background: #f6f9f7;
+  line-height: 1.55;
+}
+
+.route-waypoint-row {
+  margin-top: 12px;
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr) auto;
+  gap: 9px;
+  align-items: start;
+}
+
+.route-waypoint-number {
+  width: 28px;
+  height: 28px;
+  margin-top: 27px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  color: #fff;
+  background: #16845a;
+  font-size: 9px;
+  font-weight: 900;
+}
+
+.route-waypoint-actions {
+  margin-top: 27px;
+  display: flex;
+  gap: 5px;
+}
+
+.route-planner .route-waypoint-actions button {
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  color: #315d48;
+  background: #edf3ef;
+}
+
+.route-planner .route-waypoint-actions button.danger {
+  width: auto;
+  padding: 0 10px;
+  color: #9a4036;
+  background: #faece9;
+}
+
+.route-plan-toolbar {
+  flex-wrap: wrap;
+  padding-top: 2px;
+}
+
+.route-planner label.route-auto-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
+
+.route-planner .route-auto-toggle input {
+  width: 17px;
+  height: 17px;
+  accent-color: #16845a;
+}
+
+.route-planner .route-auto-toggle span,
+.route-plan-meta {
+  color: #52645a;
+  font-size: 9px;
+  font-weight: 800;
+}
+
+.route-plan-meta {
+  margin-left: auto;
+  padding: 7px 9px;
+  border-radius: 20px;
+  background: #edf4f0;
+}
+
+.route-planner button.route-calculate-button {
+  min-width: 190px;
+  background: #16784f;
+}
+
+.route-map-error {
+  margin: 9px 0 0;
+  font-size: 10px;
+  font-weight: 800;
+}
+
+@media (max-width: 720px) {
+  .route-address-control {
+    grid-template-columns: 1fr;
+  }
+
+  .route-planner .route-address-control button,
+  .route-planner button.route-calculate-button {
+    width: 100%;
+  }
+
+  .route-waypoint-row {
+    grid-template-columns: 26px minmax(0, 1fr);
+  }
+
+  .route-waypoint-number {
+    width: 26px;
+    height: 26px;
+  }
+
+  .route-waypoint-actions {
+    grid-column: 2;
+    margin-top: 0;
+  }
+
+  .route-plan-toolbar {
+    align-items: stretch;
+  }
+
+  .route-auto-toggle,
+  .route-plan-meta,
+  .route-calculate-button {
+    flex: 1 0 100%;
+    margin-left: 0;
+  }
+}

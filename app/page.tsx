@@ -2728,10 +2728,13 @@ const resourceFacility = {
   latitude: 35.0878,
 };
 
-function optimizeRouteStops(stops: Array<Coordinate & { name: string }>) {
+function optimizeRouteStops(
+  stops: Array<Coordinate & { name: string }>,
+  start: Coordinate = resourceFacility,
+) {
   const remaining = [...stops];
   const optimized: Array<Coordinate & { name: string }> = [];
-  let current: Coordinate = resourceFacility;
+  let current: Coordinate = start;
 
   while (remaining.length > 0) {
     let closestIndex = 0;
@@ -2755,7 +2758,7 @@ function optimizeRouteStops(stops: Array<Coordinate & { name: string }>) {
   return optimized;
 }
 
-function KakaoRouteMap({
+function LegacyKakaoRouteMap({
   supabase,
   stops = [],
 }: {
@@ -3010,6 +3013,526 @@ function KakaoRouteMap({
         </span>
         <span>
           방문 지점 <b>{stops.length}곳</b>
+        </span>
+      </div>
+    </>
+  );
+}
+
+type RouteLocation = Coordinate & { name: string };
+type RouteAddressCandidate = RouteLocation & { address: string };
+type EditableWaypoint = {
+  id: string;
+  query: string;
+  location: RouteLocation | null;
+};
+
+function RouteAddressPicker({
+  label,
+  value,
+  selected,
+  supabase,
+  placeholder,
+  onValueChange,
+  onSelect,
+}: {
+  label: string;
+  value: string;
+  selected: RouteLocation | null;
+  supabase: SupabaseClient;
+  placeholder: string;
+  onValueChange: (value: string) => void;
+  onSelect: (location: RouteLocation) => void;
+}) {
+  const [candidates, setCandidates] = useState<RouteAddressCandidate[]>([]);
+  const [searching, setSearching] = useState(false);
+  const [searchError, setSearchError] = useState("");
+
+  const searchAddress = async () => {
+    const query = value.trim();
+    if (!query) {
+      setSearchError("주소나 장소명을 입력해 주세요.");
+      return;
+    }
+    if (query === "B.SORI 자원화센터") {
+      onSelect(resourceFacility);
+      setCandidates([]);
+      setSearchError("");
+      return;
+    }
+
+    setSearching(true);
+    setSearchError("");
+    try {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+      if (!session?.access_token) {
+        throw new Error("로그인 세션을 확인하지 못했습니다.");
+      }
+      const response = await fetch(
+        `/api/kakao/geocode?query=${encodeURIComponent(query)}`,
+        { headers: { Authorization: `Bearer ${session.access_token}` } },
+      );
+      const payload = (await response.json()) as {
+        results?: RouteAddressCandidate[];
+        result?: RouteAddressCandidate;
+        error?: string;
+      };
+      if (!response.ok) {
+        throw new Error(payload.error ?? "주소를 찾지 못했습니다.");
+      }
+      const results = payload.results ?? (payload.result ? [payload.result] : []);
+      setCandidates(results);
+      if (results.length === 0) {
+        setSearchError("일치하는 주소나 장소가 없습니다.");
+      }
+    } catch (caught) {
+      setCandidates([]);
+      setSearchError(
+        caught instanceof Error ? caught.message : "주소 검색 중 오류가 발생했습니다.",
+      );
+    } finally {
+      setSearching(false);
+    }
+  };
+
+  return (
+    <div className="route-address-picker">
+      <span className="route-address-label">{label}</span>
+      <div className="route-address-control">
+        <input
+          value={value}
+          onChange={(event) => {
+            onValueChange(event.target.value);
+            setCandidates([]);
+            setSearchError("");
+          }}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") {
+              event.preventDefault();
+              void searchAddress();
+            }
+          }}
+          placeholder={placeholder}
+          aria-label={`${label} 주소`}
+        />
+        <button type="button" onClick={() => void searchAddress()} disabled={searching}>
+          {searching ? "검색 중" : "주소 검색"}
+        </button>
+      </div>
+      {selected && value.trim() === selected.name && (
+        <small className="route-address-selected">선택 완료 · {selected.name}</small>
+      )}
+      {searchError && <small className="route-address-error">{searchError}</small>}
+      {candidates.length > 0 && (
+        <div className="route-address-results" role="listbox" aria-label={`${label} 검색 결과`}>
+          {candidates.map((candidate, index) => (
+            <button
+              type="button"
+              key={`${candidate.longitude}-${candidate.latitude}-${index}`}
+              onClick={() => {
+                onValueChange(candidate.name);
+                onSelect(candidate);
+                setCandidates([]);
+                setSearchError("");
+              }}
+            >
+              <strong>{candidate.name}</strong>
+              {candidate.address !== candidate.name && <span>{candidate.address}</span>}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function KakaoRouteMap({
+  supabase,
+  stops = [],
+}: {
+  supabase: SupabaseClient;
+  stops?: RouteLocation[];
+}) {
+  const mapContainer = useRef<HTMLDivElement>(null);
+  const [originQuery, setOriginQuery] = useState("B.SORI 자원화센터");
+  const [destinationQuery, setDestinationQuery] = useState("B.SORI 자원화센터");
+  const [originLocation, setOriginLocation] = useState<RouteLocation | null>(resourceFacility);
+  const [destinationLocation, setDestinationLocation] =
+    useState<RouteLocation | null>(resourceFacility);
+  const [customWaypoints, setCustomWaypoints] = useState<EditableWaypoint[]>([]);
+  const [includeRegisteredStops, setIncludeRegisteredStops] = useState(true);
+  const [customPlanApplied, setCustomPlanApplied] = useState(false);
+  const [routePlan, setRoutePlan] = useState<{
+    origin: RouteLocation;
+    destination: RouteLocation;
+    waypoints: RouteLocation[];
+  }>({ origin: resourceFacility, destination: resourceFacility, waypoints: [] });
+  const [routePlanning, setRoutePlanning] = useState(false);
+  const [route, setRoute] = useState<{
+    distanceMeters: number;
+    durationSeconds: number;
+    path: Coordinate[];
+  } | null>(null);
+  const [mapError, setMapError] = useState("");
+
+  const activeWaypoints = useMemo(
+    () =>
+      customPlanApplied
+        ? routePlan.waypoints
+        : optimizeRouteStops(stops, routePlan.origin).slice(0, 5),
+    [customPlanApplied, routePlan, stops],
+  );
+
+  const resolveAddress = async (
+    query: string,
+    selected: RouteLocation | null,
+    accessToken: string,
+  ): Promise<RouteLocation> => {
+    if (selected && selected.name === query.trim()) return selected;
+    if (query.trim() === "B.SORI 자원화센터") return resourceFacility;
+    const response = await fetch(
+      `/api/kakao/geocode?query=${encodeURIComponent(query.trim())}`,
+      { headers: { Authorization: `Bearer ${accessToken}` } },
+    );
+    const payload = (await response.json()) as {
+      result?: RouteAddressCandidate;
+      error?: string;
+    };
+    if (!response.ok || !payload.result) {
+      throw new Error(payload.error ?? `“${query}” 위치를 찾지 못했습니다.`);
+    }
+    return payload.result;
+  };
+
+  const addWaypoint = () => {
+    if (customWaypoints.length >= 5) return;
+    setCustomWaypoints((current) => [
+      ...current,
+      { id: `${Date.now()}-${Math.random()}`, query: "", location: null },
+    ]);
+  };
+
+  const updateWaypoint = (id: string, patchValue: Partial<EditableWaypoint>) => {
+    setCustomWaypoints((current) =>
+      current.map((waypoint) =>
+        waypoint.id === id ? { ...waypoint, ...patchValue } : waypoint,
+      ),
+    );
+  };
+
+  const moveWaypoint = (index: number, direction: -1 | 1) => {
+    const nextIndex = index + direction;
+    if (nextIndex < 0 || nextIndex >= customWaypoints.length) return;
+    setCustomWaypoints((current) => {
+      const next = [...current];
+      [next[index], next[nextIndex]] = [next[nextIndex], next[index]];
+      return next;
+    });
+  };
+
+  const calculateCustomRoute = async () => {
+    if (!originQuery.trim() || !destinationQuery.trim()) {
+      setMapError("출발지와 도착지를 모두 입력해 주세요.");
+      return;
+    }
+    setRoutePlanning(true);
+    setMapError("");
+    try {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+      if (!session?.access_token) {
+        throw new Error("로그인 세션을 확인하지 못했습니다.");
+      }
+
+      const [origin, destination] = await Promise.all([
+        resolveAddress(originQuery, originLocation, session.access_token),
+        resolveAddress(destinationQuery, destinationLocation, session.access_token),
+      ]);
+      const enteredWaypoints = customWaypoints.filter((waypoint) => waypoint.query.trim());
+      const resolvedCustom = await Promise.all(
+        enteredWaypoints.map((waypoint) =>
+          resolveAddress(waypoint.query, waypoint.location, session.access_token),
+        ),
+      );
+      const remainingSlots = Math.max(0, 5 - resolvedCustom.length);
+      const registered = includeRegisteredStops
+        ? optimizeRouteStops(stops, origin)
+            .filter(
+              (stop) =>
+                !resolvedCustom.some(
+                  (custom) =>
+                    Math.abs(custom.latitude - stop.latitude) < 0.00001 &&
+                    Math.abs(custom.longitude - stop.longitude) < 0.00001,
+                ),
+            )
+            .slice(0, remainingSlots)
+        : [];
+
+      setOriginQuery(origin.name);
+      setDestinationQuery(destination.name);
+      setOriginLocation(origin);
+      setDestinationLocation(destination);
+      setCustomWaypoints((current) => {
+        let resolvedIndex = 0;
+        return current.map((waypoint) =>
+          waypoint.query.trim()
+            ? {
+                ...waypoint,
+                query: resolvedCustom[resolvedIndex].name,
+                location: resolvedCustom[resolvedIndex++],
+              }
+            : waypoint,
+        );
+      });
+      setRoutePlan({
+        origin,
+        destination,
+        waypoints: [...resolvedCustom, ...registered],
+      });
+      setCustomPlanApplied(true);
+    } catch (caught) {
+      setMapError(
+        caught instanceof Error ? caught.message : "경로 계산 중 오류가 발생했습니다.",
+      );
+    } finally {
+      setRoutePlanning(false);
+    }
+  };
+
+  const routeRequestKey = useMemo(
+    () => JSON.stringify([routePlan.origin, ...activeWaypoints, routePlan.destination]),
+    [activeWaypoints, routePlan.destination, routePlan.origin],
+  );
+
+  useEffect(() => {
+    let cancelled = false;
+    const initialize = async () => {
+      try {
+        const {
+          data: { session },
+        } = await supabase.auth.getSession();
+        if (!session?.access_token) {
+          throw new Error("로그인 세션을 확인하지 못했습니다.");
+        }
+        const response = await fetch("/api/kakao/directions", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${session.access_token}`,
+          },
+          body: JSON.stringify({
+            origin: routePlan.origin,
+            destination: routePlan.destination,
+            waypoints: activeWaypoints,
+          }),
+        });
+        const payload = (await response.json()) as {
+          route?: {
+            distanceMeters: number;
+            durationSeconds: number;
+            path: Coordinate[];
+          };
+          error?: string;
+        };
+        if (!response.ok || !payload.route) {
+          throw new Error(payload.error ?? "수거 경로를 계산하지 못했습니다.");
+        }
+
+        const maps = await loadKakaoMaps();
+        if (cancelled || !mapContainer.current) return;
+        const map = new maps.Map(mapContainer.current, {
+          center: new maps.LatLng(routePlan.origin.latitude, routePlan.origin.longitude),
+          level: 7,
+        });
+        const bounds = new maps.LatLngBounds();
+        [routePlan.origin, ...activeWaypoints, routePlan.destination].forEach((stop) => {
+          const position = new maps.LatLng(stop.latitude, stop.longitude);
+          bounds.extend(position);
+          new maps.Marker({ map, position, title: stop.name });
+        });
+        if (payload.route.path.length > 0) {
+          new maps.Polyline({
+            map,
+            path: payload.route.path.map(
+              (point) => new maps.LatLng(point.latitude, point.longitude),
+            ),
+            strokeWeight: 5,
+            strokeColor: "#16845a",
+            strokeOpacity: 0.9,
+            strokeStyle: "solid",
+          });
+        }
+        map.setBounds(bounds, 44);
+        setRoute(payload.route);
+        setMapError("");
+      } catch (caught) {
+        if (cancelled) return;
+        setMapError(
+          caught instanceof Error ? caught.message : "카카오 지도를 불러오지 못했습니다.",
+        );
+      }
+    };
+    void initialize();
+    return () => {
+      cancelled = true;
+    };
+  }, [routeRequestKey, supabase]);
+
+  const durationMinutes = route
+    ? Math.max(1, Math.round(route.durationSeconds / 60))
+    : null;
+  const customCount = customWaypoints.filter((waypoint) => waypoint.query.trim()).length;
+  const automaticCount = customPlanApplied
+    ? Math.max(0, activeWaypoints.length - customCount)
+    : includeRegisteredStops
+      ? Math.min(stops.length, Math.max(0, 5 - customCount))
+      : 0;
+
+  return (
+    <>
+      <section className="route-planner" aria-label="수거 경로 편집기">
+        <RouteAddressPicker
+          label="출발지"
+          value={originQuery}
+          selected={originLocation}
+          supabase={supabase}
+          placeholder="주소 또는 장소명 입력"
+          onValueChange={(value) => {
+            setOriginQuery(value);
+            if (value !== originLocation?.name) setOriginLocation(null);
+          }}
+          onSelect={setOriginLocation}
+        />
+
+        <div className="route-waypoints">
+          <div className="route-waypoints-heading">
+            <div>
+              <strong>경유지</strong>
+              <small>직접 지정한 순서대로 방문합니다.</small>
+            </div>
+            <button type="button" onClick={addWaypoint} disabled={customWaypoints.length >= 5}>
+              + 경유지 추가
+            </button>
+          </div>
+          {customWaypoints.length === 0 && (
+            <p className="route-waypoints-empty">
+              필요한 경우 경유지를 추가하세요. 등록된 수거지는 자동으로 가까운 순서에 배치됩니다.
+            </p>
+          )}
+          {customWaypoints.map((waypoint, index) => (
+            <div className="route-waypoint-row" key={waypoint.id}>
+              <span className="route-waypoint-number">{index + 1}</span>
+              <RouteAddressPicker
+                label={`경유지 ${index + 1}`}
+                value={waypoint.query}
+                selected={waypoint.location}
+                supabase={supabase}
+                placeholder="주소 또는 장소명 입력"
+                onValueChange={(value) =>
+                  updateWaypoint(waypoint.id, {
+                    query: value,
+                    location: value === waypoint.location?.name ? waypoint.location : null,
+                  })
+                }
+                onSelect={(location) => updateWaypoint(waypoint.id, { location })}
+              />
+              <div className="route-waypoint-actions" aria-label={`경유지 ${index + 1} 순서 편집`}>
+                <button
+                  type="button"
+                  onClick={() => moveWaypoint(index, -1)}
+                  disabled={index === 0}
+                  title="위로 이동"
+                >
+                  ↑
+                </button>
+                <button
+                  type="button"
+                  onClick={() => moveWaypoint(index, 1)}
+                  disabled={index === customWaypoints.length - 1}
+                  title="아래로 이동"
+                >
+                  ↓
+                </button>
+                <button
+                  type="button"
+                  className="danger"
+                  onClick={() =>
+                    setCustomWaypoints((current) =>
+                      current.filter((item) => item.id !== waypoint.id),
+                    )
+                  }
+                  title="경유지 삭제"
+                >
+                  삭제
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+
+        <RouteAddressPicker
+          label="도착지"
+          value={destinationQuery}
+          selected={destinationLocation}
+          supabase={supabase}
+          placeholder="주소 또는 장소명 입력"
+          onValueChange={(value) => {
+            setDestinationQuery(value);
+            if (value !== destinationLocation?.name) setDestinationLocation(null);
+          }}
+          onSelect={setDestinationLocation}
+        />
+
+        <div className="route-plan-toolbar">
+          <label className="route-auto-toggle">
+            <input
+              type="checkbox"
+              checked={includeRegisteredStops}
+              onChange={(event) => setIncludeRegisteredStops(event.target.checked)}
+            />
+            <span>등록된 수거지를 남는 경유지에 자동 배치</span>
+          </label>
+          <span className="route-plan-meta">
+            직접 {customCount}곳 · 자동 {automaticCount}곳 / 최대 5곳
+          </span>
+          <button
+            type="button"
+            className="route-calculate-button"
+            onClick={() => void calculateCustomRoute()}
+            disabled={routePlanning}
+          >
+            {routePlanning ? "주소 확인 중..." : "선택한 장소로 경로 계산"}
+          </button>
+        </div>
+      </section>
+
+      <div className="route-map kakao-route-map" ref={mapContainer}>
+        {!route && (
+          <div className="map-api-state">
+            <span>{mapError ? "!" : "K"}</span>
+            <strong>{mapError ? "경로를 확인해 주세요" : "수거 경로 계산 중"}</strong>
+            <small>{mapError || "선택한 장소의 실제 이동 경로를 불러오고 있습니다."}</small>
+          </div>
+        )}
+      </div>
+      {mapError && route && <p className="route-map-error">{mapError}</p>}
+      <div className="route-summary">
+        <span>
+          총 거리 <b>{route ? `${(route.distanceMeters / 1000).toFixed(1)}km` : "확인 중"}</b>
+        </span>
+        <span>
+          예상 시간{" "}
+          <b>
+            {durationMinutes
+              ? `${Math.floor(durationMinutes / 60)}시간 ${durationMinutes % 60}분`
+              : "확인 중"}
+          </b>
+        </span>
+        <span>
+          방문 지점 <b>{activeWaypoints.length}곳</b>
         </span>
       </div>
     </>
