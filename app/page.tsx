@@ -228,6 +228,7 @@ type KakaoMapsApi = {
 type KakaoLatLng = object;
 type KakaoMap = {
   setBounds: (bounds: object, padding?: number) => void;
+  setZoomable: (zoomable: boolean) => void;
 };
 
 declare global {
@@ -3608,6 +3609,7 @@ function KakaoRouteMap({
           center: new maps.LatLng(routePlan.origin.latitude, routePlan.origin.longitude),
           level: 7,
         });
+        map.setZoomable(false);
         const bounds = new maps.LatLngBounds();
         [routePlan.origin, ...activeWaypoints, routePlan.destination].forEach((stop) => {
           const position = new maps.LatLng(stop.latitude, stop.longitude);
@@ -3770,7 +3772,8 @@ function KakaoRouteMap({
         </div>
       </section>
 
-      <div className="route-map kakao-route-map" ref={mapContainer}>
+      <div className="route-map kakao-route-map">
+        <div className="kakao-map-canvas" ref={mapContainer} />
         {!route && (
           <div className="map-api-state">
             <span>{mapError ? "!" : "K"}</span>
