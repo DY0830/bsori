@@ -618,6 +618,20 @@ function firstRelation<T>(value: T | T[] | null | undefined) {
   return Array.isArray(value) ? (value[0] ?? null) : (value ?? null);
 }
 
+function getErrorMessage(caught: unknown, fallback: string) {
+  if (caught instanceof Error && caught.message) return caught.message;
+  if (
+    caught &&
+    typeof caught === "object" &&
+    "message" in caught &&
+    typeof caught.message === "string" &&
+    caught.message
+  ) {
+    return caught.message;
+  }
+  return fallback;
+}
+
 function AuthPanel({
   supabase,
   onReady,
@@ -4301,7 +4315,7 @@ function LiveDriverWorkspace({
         if (uploadError) throw uploadError;
       }
 
-      const { error } = await supabase.rpc("advance_collection_assignment", {
+      const { error } = await supabase.rpc("advance_collection_assignment_v2", {
         p_assignment_id: assignment.id,
         p_actual_weight_kg:
           status === "도착" ? Number(weights[assignment.id]) : null,
@@ -4322,11 +4336,7 @@ function LiveDriverWorkspace({
       if (photoPath) {
         await supabase.storage.from("evidence").remove([photoPath]);
       }
-      notify(
-        caught instanceof Error
-          ? caught.message
-          : "수거 상태를 저장하지 못했습니다.",
-      );
+      notify(getErrorMessage(caught, "수거 상태를 저장하지 못했습니다."));
     } finally {
       setBusyId("");
     }
