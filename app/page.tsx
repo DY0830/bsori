@@ -3343,6 +3343,7 @@ function KakaoRouteMap({
 
         const maps = await loadKakaoMaps();
         if (cancelled || !mapContainer.current) return;
+        mapContainer.current.replaceChildren();
         const map = new maps.Map(mapContainer.current, {
           center: new maps.LatLng(routePlan.origin.latitude, routePlan.origin.longitude),
           level: 7,
@@ -3527,7 +3528,9 @@ function KakaoRouteMap({
           예상 시간{" "}
           <b>
             {durationMinutes
-              ? `${Math.floor(durationMinutes / 60)}시간 ${durationMinutes % 60}분`
+              ? durationMinutes >= 60
+                ? `${Math.floor(durationMinutes / 60)}시간 ${durationMinutes % 60}분`
+                : `${durationMinutes}분`
               : "확인 중"}
           </b>
         </span>
