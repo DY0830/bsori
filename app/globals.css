@@ -1415,6 +1415,68 @@ button.request-row {
   font-size: 8px;
   font-weight: 900;
 }
+.route-planner {
+  margin: 0 0 14px;
+  padding: 14px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: end;
+  border: 1px solid #dfe8e2;
+  border-radius: 13px;
+  background: #f7faf8;
+}
+.route-planner label {
+  min-width: 0;
+  display: grid;
+  gap: 7px;
+}
+.route-planner label > span {
+  color: #56665d;
+  font-size: 9px;
+  font-weight: 900;
+}
+.route-planner input {
+  width: 100%;
+  min-width: 0;
+  height: 42px;
+  padding: 0 12px;
+  border: 1px solid #cedbd3;
+  border-radius: 10px;
+  outline: none;
+  color: #26372d;
+  background: #fff;
+  font: inherit;
+  font-size: 10px;
+}
+.route-planner input:focus {
+  border-color: #16845a;
+  box-shadow: 0 0 0 3px rgba(22, 132, 90, 0.1);
+}
+.route-planner-arrow {
+  height: 42px;
+  display: grid;
+  place-items: center;
+  color: #16845a;
+  font-size: 16px;
+  font-weight: 900;
+}
+.route-planner button {
+  height: 42px;
+  padding: 0 17px;
+  border: 0;
+  border-radius: 10px;
+  color: #fff;
+  background: #16784f;
+  font-size: 9px;
+  font-weight: 900;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.route-planner button:disabled {
+  cursor: wait;
+  opacity: 0.6;
+}
 .route-map {
   height: 455px;
   position: relative;
@@ -2452,6 +2514,16 @@ button.request-row {
   }
   .route-summary {
     grid-template-columns: 1fr 1fr 1fr;
+  }
+  .route-planner {
+    grid-template-columns: 1fr;
+  }
+  .route-planner-arrow {
+    height: 18px;
+    transform: rotate(90deg);
+  }
+  .route-planner button {
+    width: 100%;
   }
   .driver-task {
     grid-template-columns: 28px 1fr;

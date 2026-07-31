@@ -2763,12 +2763,91 @@ function KakaoRouteMap({
   stops?: Array<Coordinate & { name: string }>;
 }) {
   const mapContainer = useRef<HTMLDivElement>(null);
+  const [originAddress, setOriginAddress] = useState("B.SORI 자원화센터");
+  const [destinationAddress, setDestinationAddress] = useState(
+    "B.SORI 자원화센터",
+  );
+  const [routePlan, setRoutePlan] = useState<{
+    origin: Coordinate & { name: string };
+    destination: Coordinate & { name: string };
+  }>({
+    origin: resourceFacility,
+    destination: resourceFacility,
+  });
+  const [routePlanning, setRoutePlanning] = useState(false);
   const [route, setRoute] = useState<{
     distanceMeters: number;
     durationSeconds: number;
     path: Coordinate[];
   } | null>(null);
   const [mapError, setMapError] = useState("");
+
+  const geocodeRouteAddress = async (
+    address: string,
+    accessToken: string,
+  ): Promise<Coordinate & { name: string }> => {
+    const response = await fetch(
+      `/api/kakao/geocode?query=${encodeURIComponent(address)}`,
+      { headers: { Authorization: `Bearer ${accessToken}` } },
+    );
+    const payload = (await response.json()) as {
+      result?: { address: string; longitude: number; latitude: number };
+      error?: string;
+    };
+    if (!response.ok || !payload.result) {
+      throw new Error(payload.error ?? "주소를 찾지 못했습니다.");
+    }
+    return {
+      name: payload.result.address,
+      longitude: payload.result.longitude,
+      latitude: payload.result.latitude,
+    };
+  };
+
+  const calculateCustomRoute = async () => {
+    if (!originAddress.trim() || !destinationAddress.trim()) {
+      setMapError("출발지와 도착지를 모두 입력해 주세요.");
+      return;
+    }
+
+    setRoutePlanning(true);
+    setMapError("");
+    try {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+      if (!session?.access_token) {
+        throw new Error("로그인 세션을 확인하지 못했습니다.");
+      }
+
+      const origin =
+        originAddress.trim() === "B.SORI 자원화센터"
+          ? resourceFacility
+          : await geocodeRouteAddress(
+              originAddress.trim(),
+              session.access_token,
+            );
+      const destination =
+        destinationAddress.trim() === "B.SORI 자원화센터"
+          ? resourceFacility
+          : await geocodeRouteAddress(
+              destinationAddress.trim(),
+              session.access_token,
+            );
+
+      setOriginAddress(origin.name);
+      setDestinationAddress(destination.name);
+      setRoutePlan({ origin, destination });
+    } catch (caught) {
+      setMapError(
+        caught instanceof Error
+          ? caught.message
+          : "주소 검색 중 오류가 발생했습니다.",
+      );
+    } finally {
+      setRoutePlanning(false);
+    }
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -2792,8 +2871,8 @@ function KakaoRouteMap({
             Authorization: `Bearer ${session.access_token}`,
           },
           body: JSON.stringify({
-            origin: resourceFacility,
-            destination: resourceFacility,
+            origin: routePlan.origin,
+            destination: routePlan.destination,
             waypoints: stops,
           }),
         });
@@ -2813,8 +2892,8 @@ function KakaoRouteMap({
         if (cancelled || !mapContainer.current) return;
 
         const center = new maps.LatLng(
-          resourceFacility.latitude,
-          resourceFacility.longitude,
+          routePlan.origin.latitude,
+          routePlan.origin.longitude,
         );
         const map = new maps.Map(mapContainer.current, {
           center,
@@ -2822,7 +2901,7 @@ function KakaoRouteMap({
         });
         const bounds = new maps.LatLngBounds();
 
-        [resourceFacility, ...stops].forEach((stop) => {
+        [routePlan.origin, ...stops, routePlan.destination].forEach((stop) => {
           const position = new maps.LatLng(stop.latitude, stop.longitude);
           bounds.extend(position);
           new maps.Marker({
@@ -2862,7 +2941,7 @@ function KakaoRouteMap({
     return () => {
       cancelled = true;
     };
-  }, [stops, supabase]);
+  }, [routePlan, stops, supabase]);
 
   const durationMinutes = route
     ? Math.max(1, Math.round(route.durationSeconds / 60))
@@ -2870,6 +2949,34 @@ function KakaoRouteMap({
 
   return (
     <>
+      <div className="route-planner">
+        <label>
+          <span>출발지</span>
+          <input
+            value={originAddress}
+            onChange={(event) => setOriginAddress(event.target.value)}
+            placeholder="출발 주소를 입력하세요"
+          />
+        </label>
+        <span className="route-planner-arrow" aria-hidden="true">
+          →
+        </span>
+        <label>
+          <span>도착지</span>
+          <input
+            value={destinationAddress}
+            onChange={(event) => setDestinationAddress(event.target.value)}
+            placeholder="도착 주소를 입력하세요"
+          />
+        </label>
+        <button
+          type="button"
+          onClick={calculateCustomRoute}
+          disabled={routePlanning}
+        >
+          {routePlanning ? "주소 확인 중..." : "경로 계산"}
+        </button>
+      </div>
       <div className="route-map kakao-route-map" ref={mapContainer}>
         {!route && (
           <div className="map-api-state">
